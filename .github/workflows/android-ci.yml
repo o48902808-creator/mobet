@@ -35,7 +35,27 @@ jobs:
         run: gradle --no-daemon --warning-mode all test
 
       - name: Run Android security lint
+        id: lint
+        continue-on-error: true
         run: gradle --no-daemon --warning-mode all lintDebug
+
+      - name: Enforce lint findings
+        if: steps.lint.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('app/build/reports/lint-results-debug.xml').getroot()
+          for issue in root.findall('issue'):
+              if issue.get('severity') != 'Error':
+                  continue
+              location = issue.find('location')
+              path = location.get('file', 'app') if location is not None else 'app'
+              line = location.get('line', '1') if location is not None else '1'
+              message = issue.get('message', issue.get('id', 'Android lint failure'))
+              message = message.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+              print(f'::error file={path},line={line},title=Android lint {issue.get("id")}::{message}')
+          PY
+          exit 1
 
       - name: Assemble debug APK
         run: gradle --no-daemon --warning-mode all assembleDebug
