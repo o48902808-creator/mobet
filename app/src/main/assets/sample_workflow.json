@@ -1,0 +1,14 @@
+{
+  "name": "Android Settings demo",
+  "package": "com.android.settings",
+  "variables": {
+    "network_page": "Network & internet"
+  },
+  "steps": [
+    { "action": "wait", "text": "Settings", "timeoutMs": 5000, "retries": 1 },
+    { "action": "tap", "text": "{{var:network_page}}", "timeoutMs": 5000, "retries": 1 },
+    { "action": "wait", "text": "{{var:network_page}}", "timeoutMs": 5000 },
+    { "action": "confirm", "message": "Allow Mobet to return to the previous screen?" },
+    { "action": "back" }
+  ]
+}
