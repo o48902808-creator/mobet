@@ -123,6 +123,41 @@ class MobetAccessibilityService : AccessibilityService() {
             })
     }
 
+    fun findVisualText(query: String, callback: (Boolean, String, Double, Double) -> Unit) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
+            callback(false, "Visual OCR requires Android 11+", 0.0, 0.0)
+            return
+        }
+        takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor,
+            object : TakeScreenshotCallback {
+                override fun onSuccess(result: ScreenshotResult) {
+                    val buffer = result.hardwareBuffer
+                    val bitmap = android.graphics.Bitmap.wrapHardwareBuffer(buffer, result.colorSpace)
+                        ?.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+                    buffer.close()
+                    if (bitmap == null) {
+                        callback(false, "Could not decode screen for OCR", 0.0, 0.0)
+                        return
+                    }
+                    ai.arena.mobet.vision.OnDeviceTextRecognizer.recognize(bitmap) { recognition ->
+                        val items = recognition.getOrElse {
+                            bitmap.recycle()
+                            callback(false, it.message ?: "OCR failed", 0.0, 0.0)
+                            return@recognize
+                        }
+                        val match = ai.arena.mobet.vision.OnDeviceTextRecognizer.bestMatch(items, query)
+                        val x = match?.centerXPercent(bitmap.width) ?: 0.0
+                        val y = match?.centerYPercent(bitmap.height) ?: 0.0
+                        bitmap.recycle()
+                        if (match == null) callback(false, "OCR text not found: $query", 0.0, 0.0)
+                        else callback(true, "Matched “${match.text}” at ${match.confidence}% confidence", x, y)
+                    }
+                }
+                override fun onFailure(errorCode: Int) =
+                    callback(false, "OCR screenshot error $errorCode", 0.0, 0.0)
+            })
+    }
+
     fun latestSnapshot(): ScreenSnapshot? = snapshot
 
     fun diagnosticHistory(): List<String> =

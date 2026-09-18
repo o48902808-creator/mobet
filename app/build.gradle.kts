@@ -28,4 +28,6 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    // Bundled on-device OCR model; no network connection is required at runtime.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 }

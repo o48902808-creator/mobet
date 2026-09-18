@@ -198,10 +198,31 @@ class MainActivity : AppCompatActivity() {
             .setTitle(file.name)
             .setView(image)
             .setPositiveButton("Close", null)
+            .setNeutralButton("Read text") { _, _ -> recognizeCapture(file) }
             .setNegativeButton("Delete") { _, _ ->
                 file.delete()
                 showStatus("Screenshot deleted")
             }.show()
+    }
+
+    private fun recognizeCapture(file: java.io.File) {
+        val bitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+        if (bitmap == null) {
+            showStatus("Could not decode screenshot")
+            return
+        }
+        showStatus("Running on-device OCR…")
+        ai.arena.mobet.vision.OnDeviceTextRecognizer.recognize(bitmap) { result ->
+            bitmap.recycle()
+            result.onSuccess { lines ->
+                val text = lines.joinToString("\n") { "${it.confidence}%  ${it.text}" }
+                AlertDialog.Builder(this)
+                    .setTitle("Recognized text · ${lines.size} lines")
+                    .setMessage(text.ifBlank { "No text recognized" })
+                    .setPositiveButton("Close", null).show()
+                showStatus("OCR completed on-device")
+            }.onFailure { showStatus("OCR failed: ${it.message}") }
+        }
     }
 
     private fun showDiagnostics() {

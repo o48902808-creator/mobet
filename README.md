@@ -23,6 +23,9 @@ Mobet is an Android-first, on-device mobile automation prototype. It uses Androi
 - Display-relative tap/swipe fallback with coordinates clamped to safe screen bounds
 - Consent-gated Android 11+ screenshots stored only in private app storage
 - In-app screenshot viewer and deletion control
+- Bundled on-device Latin-script OCR with line bounds and confidence heuristics
+- Consent-gated `ocrWait` and `visualTap` workflow actions
+- Visual text matching with normalized whitespace and exact-match preference
 - Included harmless Android Settings demonstration
 
 No data is sent off-device. This prototype does not include a network permission.
@@ -57,7 +60,7 @@ Prerequisites: Android Studio Ladybug or newer, Android SDK 35, and JDK 17.
 }
 ```
 
-Selectors can use `text`, `viewId`, and/or `description`. Multiple selector properties are combined. Supported actions are `wait`, `tap`, `fill`, `scroll`, `delay`, `confirm`, `tapPoint`, `swipe`, `capture`, `back`, and `home`. Timeouts are capped at 60 seconds, delays at 10 seconds, retries at 10, and gestures at 5 seconds.
+Selectors can use `text`, `viewId`, and/or `description`. Multiple selector properties are combined. Supported actions are `wait`, `tap`, `fill`, `scroll`, `delay`, `confirm`, `tapPoint`, `swipe`, `capture`, `ocrWait`, `visualTap`, `back`, and `home`. Timeouts are capped at 60 seconds, delays at 10 seconds, retries at 10, and gestures at 5 seconds.
 
 Define non-sensitive values in the root `variables` object and reference them as `{{var:name}}`. Save sensitive values from **Secrets** and reference them as `{{secret:name}}`; plaintext secret values are never stored in workflow JSON. Add `ifText` or `unlessText` to conditionally execute a step based on the current screen. Place a `confirm` step immediately before any consequential action:
 
@@ -97,11 +100,17 @@ After visiting a target app, select **Inspect last app screen** to review action
 
 Use semantic selectors whenever possible. For inaccessible canvases only, `tapPoint` accepts `xPercent` and `yPercent`; `swipe` also requires `endXPercent` and `endYPercent`. Values are display-relative and clamped to 2–98% of screen bounds. Both actions require an immediately preceding approved `confirm` step.
 
-The Android 11+ `capture` action also requires an immediately preceding confirmation. PNG files remain in private app storage with no sharing or network upload. Use **Captures** to inspect or delete the latest image.
+The Android 11+ `capture` action also requires an immediately preceding confirmation. PNG files remain in private app storage with no sharing or network upload. Use **Captures** to inspect, OCR, or delete the latest image.
+
+`ocrWait` verifies that specified `text` is visually present. `visualTap` finds that text and taps its recognized center. Both are Android 11+ fallbacks, run through a bundled on-device OCR model, and require an immediately preceding confirmation. Accessibility selectors remain preferred because OCR can misread stylized, low-contrast, or non-Latin text.
+
+```json
+{ "action": "confirm", "message": "Use OCR to locate Continue?" },
+{ "action": "visualTap", "text": "Continue" }
+```
 
 ## Next milestones
 
-1. On-device OCR and visual matching fallback
-2. Constrained AI planning with package/action policies
+1. Constrained AI planning with package/action policies
 3. Automated Android tests, signed APK pipeline, and device compatibility suite
 4. Performance, compatibility, and accessibility hardening across real devices

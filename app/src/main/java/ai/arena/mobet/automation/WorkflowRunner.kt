@@ -99,6 +99,19 @@ class WorkflowRunner(
                     else finish(result)
                 }
             }
+            "ocrwait", "visualtap" -> {
+                val query = step.selector.text
+                if (!approved) finish("${step.action} requires an immediately preceding confirmation")
+                else if (query == null) finish("${step.action} requires text")
+                else service.findVisualText(query) { found, detail, x, y ->
+                    log(detail)
+                    if (!found) finish(detail)
+                    else if (step.action == "ocrwait") advance(step.delayMs)
+                    else service.performPointGesture(x, y, null, null, 120) { tapped ->
+                        if (tapped) advance(step.delayMs) else finish("Visual tap was cancelled")
+                    }
+                }
+            }
             "wait" -> seek(step, requireAction = false)
             "tap" -> seek(step, requireAction = true) { click(it) }
             "fill" -> seek(step, requireAction = true) { node ->
