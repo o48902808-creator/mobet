@@ -118,7 +118,7 @@ Define non-sensitive values in the root `variables` object and reference them as
 
 - Android displays a strong warning when enabling accessibility access because this capability can read and operate screen content. Only enable services you trust.
 - Mobet runs only a workflow or bounded Apex goal explicitly started in its foreground UI and offers Stop. Sensitive actions still require blocking confirmation; remote triggers remain disabled, and optional model assistance has no execution authority.
-- `QUERY_ALL_PACKAGES` supports user-authored package targets in sideloaded builds. Google Play restricts this permission; a Play-distributed edition should use declared package visibility or a user-selected app model.
+- Package discovery uses a least-privilege launcher `<queries>` declaration rather than `QUERY_ALL_PACKAGES`; non-launchable/private packages are intentionally outside the picker and autonomous launch boundary.
 - Secure fields, CAPTCHAs, biometrics, protected windows, and apps with poor accessibility metadata may not be automatable and should not be bypassed.
 - iOS does not permit an ordinary installed app to control arbitrary other apps; Android is the initial target.
 
