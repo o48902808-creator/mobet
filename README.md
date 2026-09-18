@@ -30,6 +30,9 @@ Mobet is an Android-first, on-device mobile automation prototype. It uses Androi
 - Package and action allowlists, action budgets, and runtime deadlines
 - Consequential-action detection with required adjacent confirmation
 - Runtime package-boundary enforcement
+- Offline natural-language goal compiler grounded in inspected screen elements
+- Ambiguity rejection, confidence thresholding, and automatic safety confirmations
+- Model-neutral JSON plan boundary for future local or hosted planners
 - Included harmless Android Settings demonstration
 
 No data is sent off-device. This prototype does not include a network permission.
@@ -129,8 +132,18 @@ Every workflow—including future AI-proposed plans—is rejected before launch 
 
 Visual actions must be explicitly allowed and enabled. Coordinate, screenshot, and OCR actions always require an adjacent confirmation. Taps whose labels imply sending, payment, purchase, submission, booking, transfer, publishing, acceptance, or deletion also require confirmation. Select **Validate plan policy** to inspect a plan without running it.
 
+## Grounded goal planning
+
+After visiting a target screen, choose **Generate plan from goal**. The offline compiler supports clauses beginning with `tap`, `click`, `open`, `select`, `choose`, `wait`, `find`, `locate`, `fill`, `enter`, or `type`, separated by “then”, semicolons, or new lines. Quote labels for precision:
+
+```text
+tap "Profile" then fill "Email" with "ama@example.com"
+```
+
+Every target must resolve confidently and uniquely against the inspected accessibility snapshot. Ambiguous or hallucinated targets are rejected. Consequential clauses receive confirmation steps automatically, and the finished JSON is policy-validated before entering the editor. This compiler is intentionally deterministic and offline; future model-based planners must emit the same schema and cannot bypass `PlanValidator`.
+
 ## Next milestones
 
-1. Goal-to-plan generation behind the mandatory policy validator
+1. Multi-screen observe-plan-act loop with bounded replanning
 2. Automated Android tests, signed APK pipeline, and device compatibility suite
 3. Performance, compatibility, and accessibility hardening across real devices

@@ -13,6 +13,8 @@ The Accessibility Service is the privileged boundary. The activity parses locall
 - `InteractionRecorder`: privacy-preserving tap/scroll capture; it records selectors but never entered text.
 - `ScreenInspector`: node-free snapshots with selector stability, uniqueness, role, and bounds diagnostics.
 - `SecretStore`: AES-GCM values protected by a non-exportable Android Keystore key.
+- `GoalPlanner`: offline natural-language-to-JSON compiler grounded only in inspected elements.
+- `PlanValidator`: non-bypassable package/action allowlists, budgets, visual restrictions, and confirmation rules shared by all plan sources.
 
 ## Design rules for future work
 

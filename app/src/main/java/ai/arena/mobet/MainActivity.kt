@@ -121,7 +121,10 @@ class MainActivity : AppCompatActivity() {
         library.addView(button("Secrets") { manageSecrets() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
         root.addView(library, margins(bottom = 8))
         root.addView(button("Record taps and scrolls in an app") { startRecorder() }, margins(bottom = 8))
-        root.addView(button("Validate plan policy") { validatePlan() }, margins(bottom = 8))
+        val planning = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        planning.addView(button("Generate plan from goal") { showGoalPlanner() }, LinearLayout.LayoutParams(0, -2, 1f))
+        planning.addView(button("Validate plan policy") { validatePlan() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
+        root.addView(planning, margins(bottom = 8))
         val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         tools.addView(button("Inspect last app screen") { showInspector() }, LinearLayout.LayoutParams(0, -2, 1f))
         tools.addView(button("Diagnostics") { showDiagnostics() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
@@ -301,6 +304,32 @@ class MainActivity : AppCompatActivity() {
                 } catch (error: Exception) {
                     showStatus("Could not save secret: ${error.message}")
                 }
+            }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun showGoalPlanner() {
+        val snapshot = MobetAccessibilityService.instance?.latestSnapshot()
+        if (snapshot == null || snapshot.elements.isEmpty()) {
+            showStatus("Visit the target app first so the goal can be grounded in its screen")
+            return
+        }
+        val input = EditText(this).apply {
+            hint = "Example: tap “Network & internet” then wait for “Internet”"
+            minLines = 3
+            gravity = android.view.Gravity.TOP
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Generate grounded plan")
+            .setMessage("Target: ${snapshot.packageName}\nOnly elements verified on the captured screen can be planned.")
+            .setView(input)
+            .setPositiveButton("Generate") { _, _ ->
+                ai.arena.mobet.planner.GoalPlanner.generate(input.text.toString(), snapshot)
+                    .onSuccess { plan ->
+                        editor.setText(plan)
+                        showStatus("Generated and policy-validated plan — review before running")
+                    }
+                    .onFailure { showStatus("Planner rejected goal: ${it.message}") }
             }
             .setNegativeButton("Cancel", null).show()
     }
