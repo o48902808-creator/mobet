@@ -15,7 +15,9 @@ data class InspectedElement(
 data class ScreenSnapshot(
     val packageName: String,
     val capturedAt: Long,
-    val elements: List<InspectedElement>
+    val elements: List<InspectedElement>,
+    /** Visible accessibility labels, bounded and held only in the current in-memory snapshot. */
+    val visibleLabels: Set<String> = emptySet()
 )
 
 /** Converts a live accessibility tree into a node-free diagnostic snapshot. */
@@ -70,7 +72,9 @@ object ScreenInspector {
                 bounds = "${node.bounds.left},${node.bounds.top}–${node.bounds.right},${node.bounds.bottom}"
             )
         }
-        return ScreenSnapshot(packageName, System.currentTimeMillis(), elements)
+        val visibleLabels = nodes.flatMap { listOfNotNull(it.text, it.description) }
+            .map { it.take(160) }.take(120).toSet()
+        return ScreenSnapshot(packageName, System.currentTimeMillis(), elements, visibleLabels)
     }
 
     private data class NodeData(
