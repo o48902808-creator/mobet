@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   codeql:
@@ -32,6 +31,13 @@ jobs:
       - uses: github/codeql-action/analyze@v4
         with:
           category: /language:java-kotlin
+          upload: false
+          output: sarif-results
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codeql-sarif
+          path: sarif-results
+          if-no-files-found: error
 
   dependency-review:
     if: github.event_name == 'pull_request'
