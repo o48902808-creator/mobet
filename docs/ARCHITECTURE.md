@@ -20,6 +20,22 @@ The Accessibility Service is the privileged boundary. The activity parses locall
 - `FuzzyText` / `SelectorResolver` (agent): typo- and paraphrase-tolerant matching plus guarded self-healing with confidence floor, ambiguity margin, and abstention.
 - `ScreenFingerprint` / `WorldModel` (agent): order-insensitive structural screen hashes, Jaccard screen similarity, and the bounded on-device transition graph.
 - `AuditLedger` (audit): SHA-256 hash-chained, tamper-evident, bounded execution history with full-chain verification.
+- `AutonomousAgent` (agent): bounded observe–deliberate–act–verify controller. It verifies progress after every device operation, backtracks out of exhausted branches, and stops at package or cycle boundaries.
+- `Deliberator` (agent): deterministic, uncertainty-aware action ranking. It exploits successful experience before exploring safe reversible actions and abstains when no bounded candidate exists.
+- `AgentDevice` (agent): narrow integration seam that keeps accessibility execution and policy enforcement outside the reasoning engine.
+- `ExperienceStore` / `ExperienceNavigator` (agent): bounded transition and dead-end memory plus cycle-safe graph search. Memory informs proposals but never bypasses live verification.
+- `AgentPlanValidator` (agent): counterfactual gate for autonomous proposals, including risk budgets and terminal-only irreversible actions.
+
+## Autonomous control loop
+
+1. **Observe** a node-free screen state through `AgentDevice`.
+2. **Verify** the goal, package boundary, and remaining cycle budget.
+3. **Deliberate** over actions that fit the goal's risk ceiling and are not remembered dead ends.
+4. **Act** through the device seam, which may independently reject the operation.
+5. **Verify progress** from a fresh observation; record the transition only after observing its result.
+6. **Backtrack** when a branch has no safe unexplored action. The failed parent edge is marked dead so it is not retried on this or a later run.
+
+The implementation deliberately avoids unconstrained recursive planning, arbitrary code execution, remote triggers, and model-defined safety decisions. A future local or hosted model can rank candidates or suggest goals, but deterministic budgets, validation, execution, and verification remain authoritative.
 
 ## Runtime safety rails
 
