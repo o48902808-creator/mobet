@@ -10,6 +10,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 class MobetAccessibilityService : AccessibilityService() {
     private var runner: WorkflowRunner? = null
     private val recorder by lazy { InteractionRecorder(packageName) }
+    private val ledger by lazy { ai.arena.mobet.audit.AuditLedger(this) }
+    private val worldModel by lazy { ai.arena.mobet.agent.WorldModel(this) }
     private var lastInspectionAt = 0L
     @Volatile private var snapshot: ScreenSnapshot? = null
 
@@ -60,12 +62,13 @@ class MobetAccessibilityService : AccessibilityService() {
 
     fun launchTarget(packageName: String): Boolean = launch(packageName)
 
-    fun requestConfirmation(message: String) {
-        emit("Waiting for confirmation")
+    fun requestConfirmation(message: String, hardened: Boolean = false) {
+        emit(if (hardened) "Waiting for typed confirmation" else "Waiting for confirmation")
         startActivity(
             Intent(this, MainActivity::class.java)
                 .setAction(ACTION_CONFIRM)
                 .putExtra(EXTRA_CONFIRM_MESSAGE, message)
+                .putExtra(EXTRA_CONFIRM_HARDENED, hardened)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         )
     }
@@ -174,6 +177,12 @@ class MobetAccessibilityService : AccessibilityService() {
     fun clearDiagnosticHistory() =
         getSharedPreferences("diagnostics", MODE_PRIVATE).edit().remove("events").apply()
 
+    fun auditLedger(): ai.arena.mobet.audit.AuditLedger = ledger
+
+    fun worldModelSummary(): String = worldModel.summary()
+
+    fun clearWorldModel() = worldModel.clear()
+
     internal fun root(): AccessibilityNodeInfo? = rootInActiveWindow
 
     internal fun launch(packageName: String): Boolean {
@@ -196,6 +205,7 @@ class MobetAccessibilityService : AccessibilityService() {
         val lines = (preferences.getString("events", "").orEmpty().lineSequence()
             .filter(String::isNotBlank).toList() + "$timestamp  $message").takeLast(100)
         preferences.edit().putString("events", lines.joinToString("\n")).apply()
+        ledger.append(message)
         sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName).putExtra(EXTRA_STATUS, message))
     }
 
@@ -204,6 +214,7 @@ class MobetAccessibilityService : AccessibilityService() {
         const val ACTION_CONFIRM = "ai.arena.mobet.CONFIRM"
         const val EXTRA_STATUS = "status"
         const val EXTRA_CONFIRM_MESSAGE = "confirm_message"
+        const val EXTRA_CONFIRM_HARDENED = "confirm_hardened"
         @Volatile var instance: MobetAccessibilityService? = null
             private set
     }

@@ -9,7 +9,8 @@
     "allowedActions": ["wait", "tap", "confirm", "back"],
     "maxActions": 10,
     "maxRuntimeMs": 30000,
-    "allowVisualFallbacks": false
+    "allowVisualFallbacks": false,
+    "allowSelfHealing": true
   },
   "steps": [
     { "action": "wait", "text": "Settings", "timeoutMs": 5000, "retries": 1 },

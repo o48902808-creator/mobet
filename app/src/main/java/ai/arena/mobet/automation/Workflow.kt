@@ -79,7 +79,8 @@ data class Workflow(
                 allowedActions = stringSet(policyJson, "allowedActions", defaultActions).map(String::lowercase).toSet(),
                 maxActions = policyJson.optInt("maxActions", 50).coerceIn(1, 200),
                 maxRuntimeMs = policyJson.optLong("maxRuntimeMs", 120_000).coerceIn(5_000, 900_000),
-                allowVisualFallbacks = policyJson.optBoolean("allowVisualFallbacks", false)
+                allowVisualFallbacks = policyJson.optBoolean("allowVisualFallbacks", false),
+                allowSelfHealing = policyJson.optBoolean("allowSelfHealing", false)
             )
             return Workflow(
                 name = root.optString("name", "Untitled workflow"),

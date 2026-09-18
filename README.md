@@ -2,6 +2,17 @@
 
 Mobet is an Android-first, on-device mobile automation prototype. It uses Android's Accessibility API to locate controls and run explicit JSON workflows that the phone owner starts.
 
+## Frontier capabilities (v0.2)
+
+- **Graduated risk engine** — every step is scored by a deterministic, explainable `RiskEngine` (consequential, destructive, financial, and credential signals are additive). `ELEVATED` steps require an adjacent confirm; `CRITICAL` steps (e.g. "Confirm transfer of $500") escalate to a **hardened typed confirmation** where the user must literally type `APPROVE`.
+- **Self-healing selectors (opt-in)** — when an app update renames "Network & internet" to "Network and internet" or rotates a resource ID, the runner can heal the selector against the live screen using blended Jaccard + Levenshtein similarity. Healing is policy-gated (`allowSelfHealing`), limited to LOW-risk steps, one-shot per step, requires both a confidence floor *and* a margin over the runner-up so it abstains rather than guesses, and every heal is logged.
+- **Counterfactual dry run** — `Dry run` statically walks the plan against the last accessibility snapshot without touching the device: per-step grounding grades (✔ / ≈ / ✖), risk tiers, confirmation gates, and an estimated duration. Secret and literal fill values are masked in the report.
+- **Loop guard + screen fingerprinting** — each observed screen is hashed into an order-insensitive structural fingerprint; a screen revisited too many times without progress aborts the run instead of burning the runtime budget.
+- **On-device world model** — Mobet passively learns a screen-transition graph (`fingerprint --action--> fingerprint`) while workflows run. Only structural hashes and the selectors from your own workflows are stored, bounded to 400 edges, never leaving the device. It gives future planners a grounded navigation prior.
+- **Tamper-evident audit ledger** — every runner event is appended to a SHA-256 hash chain (`hash = H(prev | seq | ts | event)`). The **Audit ledger** screen re-verifies the whole chain and pinpoints the first broken link if the history was altered.
+- **Risk-aware goal compiler** — the offline planner now shares the exact same `RiskEngine` as the runner, inserts confirmations with the *reason* attached, grounds `fill` clauses only against editable elements, understands `go back` and `scroll`, and uses typo-tolerant fuzzy grounding.
+- **JVM unit test suite + CI** — deterministic components (risk engine, validator, fuzzy matcher, resolver, fingerprints, planner, simulator, parser) are covered by plain JUnit tests, run in GitHub Actions on every push alongside a debug APK build.
+
 ## Current MVP
 
 - Launch an installed application by package name
@@ -126,11 +137,16 @@ Every workflow—including future AI-proposed plans—is rejected before launch 
   "allowedActions": ["wait", "tap", "fill", "confirm"],
   "maxActions": 30,
   "maxRuntimeMs": 120000,
-  "allowVisualFallbacks": false
+  "allowVisualFallbacks": false,
+  "allowSelfHealing": false
 }
 ```
 
-Visual actions must be explicitly allowed and enabled. Coordinate, screenshot, and OCR actions always require an adjacent confirmation. Taps whose labels imply sending, payment, purchase, submission, booking, transfer, publishing, acceptance, or deletion also require confirmation. Select **Validate plan policy** to inspect a plan without running it.
+Visual actions must be explicitly allowed and enabled. Coordinate, screenshot, and OCR actions always require an adjacent confirmation. Instead of a binary keyword list, the `RiskEngine` scores each step across consequential, destructive, financial, and credential signals: `ELEVATED` steps require an immediately preceding `confirm`, and `CRITICAL` steps additionally demand a typed `APPROVE` at runtime. Select **Validate plan policy** for the static verdict or **Dry run** for the full counterfactual preflight report.
+
+### Self-healing selectors
+
+Set `"allowSelfHealing": true` to let the runner repair a selector that no longer matches after an app update. Healing only ever runs for steps scored at or below LOW risk, fires at most once per step, must clear a 72% confidence floor plus an 8% margin over the second-best candidate, and appears in the diagnostics and audit ledger as `healed to "…" via text (94%)`. Consequential steps are never healed — they fail loudly instead.
 
 ## Grounded goal planning
 
@@ -142,8 +158,25 @@ tap "Profile" then fill "Email" with "ama@example.com"
 
 Every target must resolve confidently and uniquely against the inspected accessibility snapshot. Ambiguous or hallucinated targets are rejected. Consequential clauses receive confirmation steps automatically, and the finished JSON is policy-validated before entering the editor. This compiler is intentionally deterministic and offline; future model-based planners must emit the same schema and cannot bypass `PlanValidator`.
 
+## Trust, transparency, and memory
+
+- **Audit ledger** — a bounded, on-device, hash-chained log of every runner event. Open **Audit ledger** to verify the chain (`✔ Hash chain verified`) or detect tampering, and clear it at any time. Events contain runner status text only — never screen content or secret values.
+- **World model** — open **World model** to see how many screens and transitions Mobet has learned for the apps you automate. The graph stores only 16-character structural fingerprints plus the workflow's own action selectors, is capped at 400 edges with least-recently-seen eviction, and can be cleared with one tap.
+- **Loop guard** — if the same screen fingerprint is observed more times than the plan could legitimately need (steps + slack) without a structural change, the run aborts with a diagnostic rather than looping until the runtime budget expires. This is the hard rail that makes future bounded replanning safe to add.
+
+## Testing and CI
+
+JVM unit tests cover every deterministic component: `RiskEngine` tiers, `PlanValidator` rules, `FuzzyText` similarity, `SelectorResolver` healing and abstention, `ScreenFingerprint` stability, `GoalPlanner` grounding/rejection, `PlanSimulator` reports (including secret masking), and `Workflow` parsing bounds.
+
+```bash
+gradle test            # run the JVM unit suite
+gradle assembleDebug   # build the debug APK
+```
+
+GitHub Actions (`.github/workflows/android-ci.yml`) runs both on every push and pull request and uploads test reports plus the debug APK as artifacts.
+
 ## Next milestones
 
-1. Multi-screen observe-plan-act loop with bounded replanning
-2. Automated Android tests, signed APK pipeline, and device compatibility suite
+1. Multi-screen observe-plan-act loop with bounded replanning driven by the learned world model
+2. Instrumented on-device test suite and signed APK pipeline
 3. Performance, compatibility, and accessibility hardening across real devices
