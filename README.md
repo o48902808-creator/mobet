@@ -26,6 +26,10 @@ Mobet is an Android-first, on-device mobile automation prototype. It uses Androi
 - Bundled on-device Latin-script OCR with line bounds and confidence heuristics
 - Consent-gated `ocrWait` and `visualTap` workflow actions
 - Visual text matching with normalized whitespace and exact-match preference
+- Mandatory preflight policy validation for every plan
+- Package and action allowlists, action budgets, and runtime deadlines
+- Consequential-action detection with required adjacent confirmation
+- Runtime package-boundary enforcement
 - Included harmless Android Settings demonstration
 
 No data is sent off-device. This prototype does not include a network permission.
@@ -109,8 +113,24 @@ The Android 11+ `capture` action also requires an immediately preceding confirma
 { "action": "visualTap", "text": "Continue" }
 ```
 
+## Constrained planning policy
+
+Every workflow—including future AI-proposed plans—is rejected before launch unless it satisfies its policy. The runner also enforces runtime and package boundaries while executing.
+
+```json
+"policy": {
+  "allowedPackages": ["com.example.app"],
+  "allowedActions": ["wait", "tap", "fill", "confirm"],
+  "maxActions": 30,
+  "maxRuntimeMs": 120000,
+  "allowVisualFallbacks": false
+}
+```
+
+Visual actions must be explicitly allowed and enabled. Coordinate, screenshot, and OCR actions always require an adjacent confirmation. Taps whose labels imply sending, payment, purchase, submission, booking, transfer, publishing, acceptance, or deletion also require confirmation. Select **Validate plan policy** to inspect a plan without running it.
+
 ## Next milestones
 
-1. Constrained AI planning with package/action policies
-3. Automated Android tests, signed APK pipeline, and device compatibility suite
-4. Performance, compatibility, and accessibility hardening across real devices
+1. Goal-to-plan generation behind the mandatory policy validator
+2. Automated Android tests, signed APK pipeline, and device compatibility suite
+3. Performance, compatibility, and accessibility hardening across real devices

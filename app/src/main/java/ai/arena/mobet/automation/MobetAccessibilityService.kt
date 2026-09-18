@@ -70,7 +70,14 @@ class MobetAccessibilityService : AccessibilityService() {
         )
     }
 
-    fun respondToConfirmation(approved: Boolean) = runner?.confirmationResult(approved)
+    fun respondToConfirmation(approved: Boolean) {
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        runner?.confirmationResult(approved)
+    }
+
+    fun activePackageName(): String? = rootInActiveWindow?.let { root ->
+        try { root.packageName?.toString() } finally { root.recycle() }
+    }
 
     fun performPointGesture(
         startX: Double, startY: Double, endX: Double?, endY: Double?, durationMs: Long,

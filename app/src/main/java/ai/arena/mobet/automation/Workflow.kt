@@ -1,5 +1,6 @@
 package ai.arena.mobet.automation
 
+import ai.arena.mobet.policy.AutomationPolicy
 import org.json.JSONObject
 
 data class Selector(
@@ -29,7 +30,8 @@ data class Workflow(
     val name: String,
     val packageName: String?,
     val variables: Map<String, String>,
-    val steps: List<Step>
+    val steps: List<Step>,
+    val policy: AutomationPolicy
 ) {
     companion object {
         fun parse(source: String): Workflow {
@@ -67,11 +69,24 @@ data class Workflow(
                 }
             }
             require(steps.isNotEmpty()) { "A workflow needs at least one step" }
+            val targetPackage = optional(root, "package")
+            val policyJson = root.optJSONObject("policy") ?: JSONObject()
+            val defaultPackages = targetPackage?.let(::setOf) ?: emptySet()
+            val allowedPackages = stringSet(policyJson, "allowedPackages", defaultPackages)
+            val defaultActions = AutomationPolicy.DEFAULT_ACTIONS
+            val policy = AutomationPolicy(
+                allowedPackages = allowedPackages,
+                allowedActions = stringSet(policyJson, "allowedActions", defaultActions).map(String::lowercase).toSet(),
+                maxActions = policyJson.optInt("maxActions", 50).coerceIn(1, 200),
+                maxRuntimeMs = policyJson.optLong("maxRuntimeMs", 120_000).coerceIn(5_000, 900_000),
+                allowVisualFallbacks = policyJson.optBoolean("allowVisualFallbacks", false)
+            )
             return Workflow(
                 name = root.optString("name", "Untitled workflow"),
-                packageName = optional(root, "package"),
+                packageName = targetPackage,
                 variables = variables,
-                steps = steps
+                steps = steps,
+                policy = policy
             )
         }
 
@@ -80,5 +95,10 @@ data class Workflow(
 
         private fun percent(objectValue: JSONObject, key: String): Double? =
             if (objectValue.has(key)) objectValue.getDouble(key).coerceIn(0.02, 0.98) else null
+
+        private fun stringSet(objectValue: JSONObject, key: String, fallback: Set<String>): Set<String> {
+            val array = objectValue.optJSONArray(key) ?: return fallback
+            return buildSet { for (i in 0 until array.length()) add(array.getString(i)) }
+        }
     }
 }

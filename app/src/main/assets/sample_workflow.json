@@ -4,6 +4,13 @@
   "variables": {
     "network_page": "Network & internet"
   },
+  "policy": {
+    "allowedPackages": ["com.android.settings"],
+    "allowedActions": ["wait", "tap", "confirm", "back"],
+    "maxActions": 10,
+    "maxRuntimeMs": 30000,
+    "allowVisualFallbacks": false
+  },
   "steps": [
     { "action": "wait", "text": "Settings", "timeoutMs": 5000, "retries": 1 },
     { "action": "tap", "text": "{{var:network_page}}", "timeoutMs": 5000, "retries": 1 },

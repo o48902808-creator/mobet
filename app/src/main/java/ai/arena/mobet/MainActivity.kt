@@ -2,6 +2,7 @@ package ai.arena.mobet
 
 import ai.arena.mobet.automation.MobetAccessibilityService
 import ai.arena.mobet.automation.Workflow
+import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.security.SecretStore
 import android.app.AlertDialog
 import android.content.BroadcastReceiver
@@ -120,6 +121,7 @@ class MainActivity : AppCompatActivity() {
         library.addView(button("Secrets") { manageSecrets() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
         root.addView(library, margins(bottom = 8))
         root.addView(button("Record taps and scrolls in an app") { startRecorder() }, margins(bottom = 8))
+        root.addView(button("Validate plan policy") { validatePlan() }, margins(bottom = 8))
         val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         tools.addView(button("Inspect last app screen") { showInspector() }, LinearLayout.LayoutParams(0, -2, 1f))
         tools.addView(button("Diagnostics") { showDiagnostics() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
@@ -301,6 +303,23 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun validatePlan() {
+        try {
+            val workflow = Workflow.parse(editor.text.toString())
+            val violations = PlanValidator.validate(workflow)
+            val message = if (violations.isEmpty()) {
+                "Approved by policy\n\nTarget: ${workflow.packageName}\nActions: ${workflow.steps.size}/${workflow.policy.maxActions}\nRuntime: ${workflow.policy.maxRuntimeMs} ms\nVisual fallback: ${workflow.policy.allowVisualFallbacks}"
+            } else violations.joinToString("\n") {
+                "• " + (it.step?.let { step -> "Step $step: " } ?: "") + it.message
+            }
+            AlertDialog.Builder(this)
+                .setTitle(if (violations.isEmpty()) "Plan valid" else "Plan rejected")
+                .setMessage(message).setPositiveButton("Close", null).show()
+        } catch (error: Exception) {
+            showStatus("Invalid workflow: ${error.message}")
+        }
     }
 
     private fun saveToLibrary() {

@@ -1,5 +1,6 @@
 package ai.arena.mobet.automation
 
+import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.security.SecretStore
 import android.os.Handler
 import android.os.Looper
@@ -17,10 +18,20 @@ class WorkflowRunner(
     private var index = 0
     private var awaitingConfirmation = false
     private var nextActionApproved = false
+    private var startedAt = 0L
 
     fun start(value: Workflow) {
+        val violations = PlanValidator.validate(value)
+        if (violations.isNotEmpty()) {
+            log("Policy rejected plan: " + violations.joinToString("; ") {
+                (it.step?.let { step -> "step $step: " } ?: "") + it.message
+            })
+            cancelled = true
+            return
+        }
         workflow = value
-        log("Starting “${value.name}”")
+        startedAt = SystemClock.uptimeMillis()
+        log("Policy approved “${value.name}” (${value.steps.size}/${value.policy.maxActions} actions)")
         if (value.packageName != null && !service.launch(value.packageName)) {
             finish("Could not launch ${value.packageName}")
             return
@@ -42,13 +53,24 @@ class WorkflowRunner(
         if (approved) {
             log("Confirmation approved")
             nextActionApproved = true
-            advance(200)
+            advance(700)
         } else finish("Confirmation denied")
     }
 
     private fun executeCurrent() {
         if (cancelled) return
         val flow = workflow ?: return
+        if (SystemClock.uptimeMillis() - startedAt > flow.policy.maxRuntimeMs) {
+            finish("Runtime budget exceeded (${flow.policy.maxRuntimeMs} ms)")
+            return
+        }
+        if (index > 0) {
+            val activePackage = service.activePackageName()
+            if (activePackage != null && activePackage !in flow.policy.allowedPackages) {
+                finish("Package boundary blocked action in $activePackage")
+                return
+            }
+        }
         if (index >= flow.steps.size) {
             finish("Completed ${flow.steps.size} steps")
             return
