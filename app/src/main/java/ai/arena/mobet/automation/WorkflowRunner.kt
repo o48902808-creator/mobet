@@ -218,8 +218,8 @@ class WorkflowRunner(
 
     private fun expand(step: Step, variables: Map<String, String>): Step? {
         fun resolve(source: String?): String? {
-            source ?: return null
-            var result = source
+            if (source == null) return null
+            var result: String = source
             Regex("\\{\\{var:([A-Za-z0-9_.-]+)}}").findAll(source).forEach {
                 val name = it.groupValues[1]
                 val value = variables[name] ?: run {
@@ -251,7 +251,7 @@ class WorkflowRunner(
         )
     }
 
-    private fun seek(step: Step, requireAction: Boolean, action: (AccessibilityNodeInfo) -> Boolean = { true }, retry: Int = 0) {
+    private fun seek(step: Step, requireAction: Boolean, retry: Int = 0, action: (AccessibilityNodeInfo) -> Boolean = { true }) {
         val started = SystemClock.uptimeMillis()
         fun attempt() {
             if (cancelled) return
@@ -270,12 +270,12 @@ class WorkflowRunner(
     private fun retryOrFail(step: Step, requireAction: Boolean, action: (AccessibilityNodeInfo) -> Boolean, retry: Int, reason: String) {
         if (retry < step.retries) {
             log("$reason; retry ${retry + 1}/${step.retries}")
-            handler.postDelayed({ seek(step, requireAction, action, retry + 1) }, 500)
+            handler.postDelayed({ seek(step, requireAction, retry + 1, action) }, 500)
             return
         }
         val healed = tryHeal(step, reason)
         if (healed != null) {
-            handler.postDelayed({ seek(healed, requireAction, action, retry) }, 300)
+            handler.postDelayed({ seek(healed, requireAction, retry, action) }, 300)
             return
         }
         finish("$reason finding ${describe(step.selector)}")
