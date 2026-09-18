@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Mobet</string>
+    <string name="accessibility_service_description">Runs workflows you explicitly start by reading labels and operating controls on screen.</string>
+</resources>
