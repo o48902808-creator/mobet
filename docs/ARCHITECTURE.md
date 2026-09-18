@@ -23,8 +23,10 @@ The Accessibility Service is the privileged boundary. The activity parses locall
 - `AutonomousAgent` / `LiveAndroidAgent` (agent): bounded observe–deliberate–act–verify controllers. The live controller owns no accessibility nodes: it submits typed actions back through a freshly validated one-action `WorkflowRunner` and verifies a new snapshot afterward.
 - `AccessibilityObservationAdapter`: converts node-free snapshots to observations/actions, assigns structural action IDs, and maps selected actions back to typed workflow steps.
 - `Deliberator` / `HierarchicalPlanner`: deterministic, uncertainty-aware ranking and subgoal decomposition with explicit preconditions/completion evidence, learned-route utility, reversibility, and strict candidate/expansion budgets.
-- `BeliefReasoner`: preserves competing hypotheses and source attribution across accessibility, OCR, user, and world-model evidence; low-confidence choices abstain.
-- `PersistentExperienceStore` / `ExperienceNavigator`: bounded private transition, outcome, repair-hash, and dead-end memory with confidence decay, expiry, app-version invalidation, and cycle-safe graph search.
+- `BeliefReasoner` / `TemporalBeliefTracker`: preserve competing hypotheses and source attribution across accessibility, OCR, user, and world-model evidence; unsupported temporal evidence decays and low-confidence choices abstain.
+- `ContentTrustEngine`: treats all screen/model text as untrusted data and blocks instruction-injection patterns from becoming action authority.
+- `PersistentExperienceStore` / `ExperienceNavigator`: AES-GCM authenticated, bounded transition, outcome, repair-hash, and dead-end memory with Bayesian reliability, confidence decay, expiry, contradiction-driven drift invalidation, app-version invalidation, and cycle-safe graph search.
+- `EncryptedStateStore` (security): namespace-bound authenticated storage backed by a non-exportable Android Keystore key with atomic legacy migration.
 - `FailureClassifier` / `RecoveryPolicies`: explicit stale-selector, loading, modal, wrong-app, permission, rejection, and dead-end handling with bounded remedies.
 - `ModelAssistant` / `ModelOutputValidator`: optional structured suggestions and rankings over allowlisted candidate IDs only; no device authority.
 - `AgentPlanValidator`: counterfactual gate for autonomous proposals, including risk, lookahead, confidence, and terminal-only irreversible constraints.

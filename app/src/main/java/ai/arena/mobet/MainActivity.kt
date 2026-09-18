@@ -400,7 +400,7 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("Private Apex memory")
             .setMessage(service.agentMemorySummary() + "\n" + service.worldModelSummary() +
-                "\n\nStored locally: structural hashes, bounded transition outcomes, confidence, recency, app versions, selector-repair hashes, and dead ends. Screen text, OCR output, entered values, and screenshots are excluded. Knowledge decays and major app-version changes invalidate it.")
+                "\n\nAES-GCM encrypted on-device with an Android Keystore key: structural hashes, bounded transition outcomes, confidence, recency, app versions, selector-repair hashes, and dead ends. Screen text, OCR output, entered values, and screenshots are excluded. Knowledge decays; repeated contradictions and major app-version changes invalidate it.")
             .setPositiveButton("Close", null)
             .setNegativeButton("Clear all") { _, _ ->
                 service.clearAgentMemory(); service.clearWorldModel(); showStatus("Agent memory cleared")

@@ -1,6 +1,7 @@
 package ai.arena.mobet.agent
 
 import android.content.Context
+import ai.arena.mobet.security.EncryptedStateStore
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
@@ -12,7 +13,17 @@ import kotlin.math.exp
  * outcomes. App major-version changes and structural drift invalidate incompatible knowledge.
  */
 class PersistentExperienceStore(context: Context, private val capacity: Int = 600) : ExperienceStore {
-    private val preferences = context.getSharedPreferences("agent_memory_v2", Context.MODE_PRIVATE)
+    private val secureStore = EncryptedStateStore(context, "agent_memory_v3")
+    private val legacyPreferences = context.getSharedPreferences("agent_memory_v2", Context.MODE_PRIVATE)
+
+    init {
+        // One-time authenticated migration; delete plaintext only after the encrypted commit lands.
+        if (secureStore.read() == null) {
+            legacyPreferences.getString("memory", null)?.let { legacy ->
+                if (secureStore.write(legacy)) legacyPreferences.edit().clear().commit()
+            }
+        }
+    }
 
     @Synchronized override fun record(experience: TransitionExperience) {
         val root = load()
@@ -24,6 +35,7 @@ class PersistentExperienceStore(context: Context, private val capacity: Int = 60
             put("confidence", experience.confidence.coerceIn(0.0, 1.0)); put("failure", experience.failure?.name)
         })
         while (episodes.length() > capacity) episodes.remove(0)
+        invalidateContradictedRoutes(root, experience)
         save(root)
     }
 
@@ -99,10 +111,29 @@ class PersistentExperienceStore(context: Context, private val capacity: Int = 60
         var success = 0
         for (i in 0 until episodes.length()) if (episodes.optJSONObject(i)?.optBoolean("progressed") == true) success++
         val rate = if (episodes.length() == 0) 0 else success * 100 / episodes.length()
-        return "Agent memory: ${episodes.length()} episodes · $rate% progress · ${root.optJSONArray("dead")?.length() ?: 0} dead ends · ${root.optJSONArray("repairs")?.length() ?: 0} repairs"
+        return "Encrypted agent memory: ${episodes.length()} episodes · $rate% progress · ${root.optJSONArray("dead")?.length() ?: 0} dead ends · ${root.optJSONArray("repairs")?.length() ?: 0} repairs · ${root.optInt("driftInvalidations")} drift invalidations"
     }
 
-    @Synchronized fun clear() = preferences.edit().clear().apply()
+    @Synchronized fun clear() { secureStore.clear(); legacyPreferences.edit().clear().commit() }
+
+    /** Three recent contradictions on a known screen constitute structural UI drift. */
+    private fun invalidateContradictedRoutes(root: JSONObject, latest: TransitionExperience) {
+        if (latest.progressed) return
+        val episodes = root.optJSONArray("episodes") ?: return
+        var consecutiveFailures = 0
+        for (i in episodes.length() - 1 downTo 0) {
+            val item = episodes.optJSONObject(i) ?: continue
+            if (item.optString("package") != latest.packageName || item.optString("from") != latest.from) continue
+            if (item.optBoolean("progressed")) break
+            consecutiveFailures++
+            if (consecutiveFailures >= UI_DRIFT_FAILURES) break
+        }
+        if (consecutiveFailures < UI_DRIFT_FAILURES) return
+        root.put("episodes", filter(episodes) {
+            it.optString("package") != latest.packageName || it.optString("from") != latest.from
+        })
+        root.put("driftInvalidations", root.optInt("driftInvalidations") + 1)
+    }
 
     private fun filter(source: JSONArray?, keep: (JSONObject) -> Boolean): JSONArray = JSONArray().also { output ->
         source ?: return@also
@@ -110,13 +141,14 @@ class PersistentExperienceStore(context: Context, private val capacity: Int = 60
     }
     private fun safeId(value: String) = if (value.length <= 96 && !value.contains("{{secret:")) value else "sha256:${hash(value)}"
     private fun hash(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }.take(24)
-    private fun load() = runCatching { JSONObject(preferences.getString("memory", "{}") ?: "{}") }.getOrDefault(JSONObject())
-    private fun save(root: JSONObject) = preferences.edit().putString("memory", root.toString()).apply()
+    private fun load() = runCatching { JSONObject(secureStore.read() ?: "{}") }.getOrDefault(JSONObject())
+    private fun save(root: JSONObject) { secureStore.write(root.toString()) }
 
     private companion object {
         const val DAY_MS = 86_400_000L
         const val HALF_LIFE_DAYS = 45.0
         const val MIN_CONFIDENCE = 0.18
         const val DEAD_END_TTL_MS = 14L * DAY_MS
+        const val UI_DRIFT_FAILURES = 3
     }
 }

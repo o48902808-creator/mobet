@@ -21,7 +21,8 @@ data class AgentAction(
     val kind: AgentActionKind = AgentActionKind.TAP,
     /** Serialized accessibility selector; never arbitrary executable input. */
     val selector: String? = null,
-    val confidence: Double = 1.0
+    val confidence: Double = 1.0,
+    val trust: ContentTrust = ContentTrust.STRUCTURAL
 )
 
 data class AgentGoal(
@@ -31,7 +32,8 @@ data class AgentGoal(
     val maxCycles: Int = 20,
     val maxRisk: Int = 29,
     val minConfidence: Double = 0.49,
-    val lookaheadExpansions: Int = 32
+    val lookaheadExpansions: Int = 32,
+    val maxRuntimeMs: Long = 120_000
 )
 
 data class ActionReceipt(val accepted: Boolean, val detail: String = "")
@@ -98,24 +100,27 @@ data class Deliberation(
 class Deliberator(private val experience: ExperienceStore) {
     fun choose(observation: AgentObservation, goal: AgentGoal, pathScreens: Set<String>): Deliberation {
         val candidates = observation.actions.asSequence()
-            .filter { it.risk <= goal.maxRisk && !experience.isDeadEnd(observation.screenId, it.id) }
+            .filter { it.risk <= goal.maxRisk && it.trust != ContentTrust.UNTRUSTED_INSTRUCTION &&
+                !experience.isDeadEnd(observation.screenId, it.id) }
             .take(MAX_CANDIDATES).toList()
         if (candidates.isEmpty()) return Deliberation(null, "no safe unexplored actions", true)
 
-        val known = experience.transitionsFrom(observation.screenId)
-            .filter { it.progressed && it.to !in pathScreens }
-            .groupBy { it.actionId }
+        val allHistory = experience.transitionsFrom(observation.screenId).groupBy { it.actionId }
+        val known = allHistory.mapValues { (_, items) ->
+            items.filter { it.progressed && it.to !in pathScreens }
+        }
         val lookahead = BudgetedLookahead(experience).simulate(observation, goal)
             .groupBy { it.actionIds.first() }.mapValues { (_, paths) -> paths.maxOf { it.utility } }
         val goalTerms = tokenize(goal.description + " " + goal.successFact)
         val ranked = candidates.map { action ->
             val semantic = tokenize(action.label).count { it in goalTerms } * 20.0
             val histories = known[action.id].orEmpty().take(goal.lookaheadExpansions.coerceIn(1, 64))
-            val learned = histories.sumOf { it.confidence * 30.0 }
-            val successRate = if (histories.isEmpty()) 0.0 else histories.count { it.progressed }.toDouble() / histories.size
+            val learned = histories.sumOf { it.confidence * 20.0 }.coerceAtMost(60.0)
+            val reliability = ExperienceStatistics.reliability(allHistory[action.id].orEmpty())
             val reversible = if (action.reversible) 4.0 else -12.0
             val simulated = (lookahead[action.id] ?: 0.0) * 0.35
-            val utility = semantic + learned + successRate * 12 + simulated + reversible - action.risk - (1.0 - action.confidence) * 20
+            val utility = semantic + learned + reliability.successProbability * reliability.confidence * 20 +
+                simulated + reversible - action.risk - (1.0 - action.confidence) * 20
             action to utility
         }.sortedWith(compareByDescending<Pair<AgentAction, Double>> { it.second }.thenBy { it.first.id })
         val best = ranked.first()
@@ -152,11 +157,17 @@ class AutonomousAgent(
         val actions = mutableListOf<String>()
         val frames = ArrayDeque<Frame>()
         var cycles = 0
+        val startedAt = System.currentTimeMillis()
         var observation = device.observe()
 
-        while (cycles < goal.maxCycles) {
-            if (goal.successFact in observation.facts) return AgentRunResult(AgentStatus.SUCCEEDED, cycles, actions, "goal verified")
+        while (true) {
+            // Verify the final observation before budgets prevent another action. Package
+            // provenance remains first so a foreign app cannot spoof expected success text.
             if (observation.packageName != goal.allowedPackage) return AgentRunResult(AgentStatus.BLOCKED, cycles, actions, "package boundary crossed")
+            if (goal.successFact in observation.facts) return AgentRunResult(AgentStatus.SUCCEEDED, cycles, actions, "goal verified")
+            if (cycles >= goal.maxCycles) return AgentRunResult(AgentStatus.EXHAUSTED, cycles, actions, "cycle budget exhausted")
+            if (System.currentTimeMillis() - startedAt > goal.maxRuntimeMs)
+                return AgentRunResult(AgentStatus.EXHAUSTED, cycles, actions, "runtime budget exhausted")
 
             val path = frames.map { it.screenId }.toSet() + observation.screenId
             val decision = deliberator.choose(observation, goal, path)
@@ -185,7 +196,6 @@ class AutonomousAgent(
             else frames.addLast(Frame(before.screenId, action.id))
             observation = after
         }
-        return AgentRunResult(AgentStatus.EXHAUSTED, cycles, actions, "cycle budget exhausted")
     }
 
     private data class Frame(val screenId: String, val actionId: String)

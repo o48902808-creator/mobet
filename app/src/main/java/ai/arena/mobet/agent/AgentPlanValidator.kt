@@ -7,9 +7,12 @@ object AgentPlanValidator {
     fun validate(goal: AgentGoal, proposed: List<AgentAction>): List<Violation> = buildList {
         if (proposed.size > goal.maxCycles) add(Violation(-1, "proposal exceeds cycle budget"))
         if (goal.lookaheadExpansions !in 1..128) add(Violation(-1, "lookahead expansion budget must be 1–128"))
+        if (goal.maxRuntimeMs !in 5_000..900_000) add(Violation(-1, "runtime budget must be 5 seconds–15 minutes"))
         proposed.forEachIndexed { index, action ->
             if (action.risk !in 0..100 || action.risk > goal.maxRisk) add(Violation(index, "risk ${action.risk} exceeds ${goal.maxRisk}"))
             if (action.confidence !in 0.0..1.0) add(Violation(index, "invalid confidence"))
+            if (action.trust == ContentTrust.UNTRUSTED_INSTRUCTION)
+                add(Violation(index, "untrusted screen instruction cannot become device authority"))
             if (!action.reversible && index != proposed.lastIndex) {
                 add(Violation(index, "irreversible action must be terminal"))
             }

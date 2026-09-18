@@ -5,18 +5,22 @@ on:
     branches: ["main", "arena/**"]
   pull_request:
 
+# Build jobs receive no repository write token. A compromised dependency cannot mutate source,
+# releases, pull requests, or commit comments.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   unit-tests:
     name: Build & JVM unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -27,36 +31,21 @@ jobs:
           gradle-version: "8.9"
 
       # The repository intentionally omits the Gradle wrapper JAR; CI pins Gradle itself.
-      - name: Run unit tests
-        run: gradle --no-daemon test 2>&1 | tee build-output.log; exit ${PIPESTATUS[0]}
+      - name: Run unit tests and Android security lint
+        run: gradle --no-daemon --warning-mode all test lintDebug 2>&1 | tee build-output.log; exit ${PIPESTATUS[0]}
 
       - name: Assemble debug APK
-        run: gradle --no-daemon assembleDebug 2>&1 | tee -a build-output.log; exit ${PIPESTATUS[0]}
-
-      # Log storage CDNs are not reachable from every environment; surface failures
-      # as a commit comment so they are readable through the plain GitHub API.
-      - name: Post failure output as commit comment
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          {
-            echo "**Android CI failure** (run ${{ github.run_id }})"
-            echo '```'
-            grep -E "e: |error:|FAILED|failed," build-output.log | head -80 || true
-            echo '---- tail ----'
-            tail -c 4000 build-output.log
-            echo '```'
-          } > comment.md
-          gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" \
-            -f body="$(cat comment.md)" || true
+        run: gradle --no-daemon --warning-mode all assembleDebug 2>&1 | tee -a build-output.log; exit ${PIPESTATUS[0]}
 
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: unit-test-reports
-          path: app/build/reports/tests/
+          path: |
+            app/build/reports/tests/
+            app/build/reports/lint-results-debug.html
+            app/build/reports/lint-results-debug.xml
           if-no-files-found: ignore
 
       - name: Upload debug APK

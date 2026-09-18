@@ -2,8 +2,11 @@
 
 Mobet is an Android-first, on-device mobile automation prototype. It uses Android's Accessibility API to locate controls and run explicit JSON workflows that the phone owner starts.
 
-## Frontier capabilities (v0.4.0)
+## Frontier capabilities (v0.5.0)
 
+- **Adversarially hardened autonomy** — every proposed selector is canonicalized against a fresh live snapshot immediately before execution; foreign-package success spoofing, stale callbacks, screen-borne prompt injection, forged action metadata, and transient one-frame completion evidence fail closed. Autonomous runs have independent cycle, search-expansion, candidate, depth, retry, package, risk, and wall-clock budgets.
+- **Encrypted adaptive intelligence** — episodic and semantic memory is AES-GCM encrypted with namespace-bound authenticated data and a non-exportable Android Keystore key. Bayesian route reliability resists one-shot overfitting; temporal evidence decays; repeated prediction contradictions trigger structural-drift invalidation; legacy plaintext metadata migrates atomically and is deleted only after a successful encrypted commit.
+- **Zero-write CI security posture** — CI runs with read-only repository permissions and no persisted checkout credential, performs deterministic intelligence tests plus Android security lint, then assembles the APK and publishes reports. The app rejects cleartext traffic and protects its UI with `FLAG_SECURE`.
 - **Live Apex Android agent** — accessibility snapshots are converted into node-free `AgentObservation`s and selected tap/scroll/back actions return through a narrow guarded gateway. Every operation is translated to a typed workflow, rescored by `RiskEngine`, validated by `PlanValidator`, confirmed when required, and executed only by `WorkflowRunner`. The UI exposes bounded goal runs with explicit completion evidence and Stop.
 - **Persistent private memory** — successful and failed transitions, dead ends, selector-repair hashes, confidence, recency, and app-version metadata survive restarts. Confidence decays over 45 days, dead ends expire, major app versions invalidate old routes, storage is bounded, and screen/OCR text, entered values, secrets, and screenshots are excluded.
 - **Hierarchical, uncertainty-aware planning** — goals decompose into subgoals with explicit preconditions and completion evidence. Accessibility, optional OCR, user, and world-model evidence remain separately attributed in a belief state; ambiguous candidates cause abstention instead of a guess.
@@ -57,7 +60,7 @@ Mobet is an Android-first, on-device mobile automation prototype. It uses Androi
 - Model-neutral JSON plan boundary for future local or hosted planners
 - Included harmless Android Settings demonstration
 
-No data is sent off-device. This prototype does not include a network permission.
+No data is sent off-device. This build does not include a network permission. See the explicit [threat model](docs/THREAT_MODEL.md) for enforced invariants and residual risks.
 
 ## Build and install
 

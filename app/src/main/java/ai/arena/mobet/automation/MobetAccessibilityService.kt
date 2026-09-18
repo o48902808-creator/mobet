@@ -207,12 +207,26 @@ class MobetAccessibilityService : AccessibilityService() {
         goal: ai.arena.mobet.agent.AgentGoal,
         callback: (Boolean, String) -> Unit
     ) {
-        val step = ai.arena.mobet.agent.AccessibilityObservationAdapter.toStep(action)
+        val liveSnapshot = currentSnapshot()
+        if (liveSnapshot?.packageName != goal.allowedPackage) {
+            callback(false, "live package provenance check failed"); return
+        }
+        // Canonicalize against the current accessibility snapshot so neither a stale plan nor an
+        // optional model can forge selectors, labels, confidence, or risk metadata.
+        val canonical = if (action.kind == ai.arena.mobet.agent.AgentActionKind.BACK) action else {
+            ai.arena.mobet.agent.AccessibilityObservationAdapter.adapt(
+                liveSnapshot, appVersion(liveSnapshot.packageName)
+            ).actions.firstOrNull { it.id == action.id && it.selector == action.selector }
+        }
+        if (canonical == null || canonical.trust == ai.arena.mobet.agent.ContentTrust.UNTRUSTED_INSTRUCTION) {
+            callback(false, "action is stale, forged, or untrusted"); return
+        }
+        val step = ai.arena.mobet.agent.AccessibilityObservationAdapter.toStep(canonical)
         if (step == null) { callback(false, "unsupported or malformed agent action"); return }
         val assessment = ai.arena.mobet.policy.RiskEngine.assess(step)
         if (assessment.score > goal.maxRisk) { callback(false, "RiskEngine blocked score ${assessment.score}"); return }
         val steps = if (assessment.tier >= ai.arena.mobet.policy.RiskTier.ELEVATED) {
-            listOf(Step("confirm", message = "Apex proposes: ${action.label}"), step)
+            listOf(Step("confirm", message = "Apex proposes: ${canonical.label}"), step)
         } else listOf(step)
         val policy = ai.arena.mobet.policy.AutomationPolicy(
             allowedPackages = setOf(goal.allowedPackage),

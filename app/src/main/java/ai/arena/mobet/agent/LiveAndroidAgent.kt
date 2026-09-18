@@ -40,7 +40,8 @@ object AccessibilityObservationAdapter {
         val stableId = "${kind.name.lowercase()}:${ScreenFingerprint.sha256(selector).take(16)}"
         return AgentAction(stableId, element.label, assessment.score,
             reversible = assessment.score < 30, kind = kind, selector = selector,
-            confidence = element.confidence / 100.0)
+            confidence = element.confidence / 100.0,
+            trust = ContentTrustEngine.assess(element.label).trust)
     }
 
     private fun parseSelector(value: String?): Selector? {
@@ -74,14 +75,20 @@ class LiveAndroidAgent(
     private var subgoalIndex = 0
     private var cancelled = true
     private var cycles = 0
+    private var startedAt = 0L
+    private var runGeneration = 0L
+    private var completionEvidenceHits = 0
+    private val beliefTracker = TemporalBeliefTracker()
     private val frames = ArrayDeque<Pair<String, String>>()
     private val recoveryAttempts = mutableMapOf<FailureKind, Int>()
 
     fun start(value: AgentGoal) {
         cancel("Autonomous run replaced", quiet = true)
         require(value.maxCycles in 1..50) { "Cycle budget must be 1–50" }
+        require(AgentPlanValidator.validate(value, emptyList()).isEmpty()) { "Invalid autonomous safety budget" }
         goal = value; plan = HierarchicalPlanner.decompose(value); subgoalIndex = 0
-        cycles = 0; frames.clear(); recoveryAttempts.clear(); cancelled = false
+        cycles = 0; completionEvidenceHits = 0; startedAt = android.os.SystemClock.uptimeMillis()
+        runGeneration++; beliefTracker.clear(); frames.clear(); recoveryAttempts.clear(); cancelled = false
         emit("Apex autonomous run started · ${plan?.subgoals?.size} subgoals · ${value.maxCycles} cycle budget")
         if (!service.launchTarget(value.allowedPackage)) finish(AgentStatus.BLOCKED, "could not launch target package")
         else handler.postDelayed(::tick, 800)
@@ -89,6 +96,7 @@ class LiveAndroidAgent(
 
     fun cancel(reason: String = "Autonomous run stopped", quiet: Boolean = false) {
         if (!cancelled) service.stopGuardedExecution()
+        runGeneration++
         cancelled = true; handler.removeCallbacksAndMessages(null)
         if (!quiet) emit(reason)
     }
@@ -96,13 +104,25 @@ class LiveAndroidAgent(
     private fun tick() {
         if (cancelled) return
         val target = goal ?: return
-        if (cycles >= target.maxCycles) { finish(AgentStatus.EXHAUSTED, "cycle budget exhausted"); return }
+        if (android.os.SystemClock.uptimeMillis() - startedAt > target.maxRuntimeMs) {
+            finish(AgentStatus.EXHAUSTED, "runtime budget exhausted"); return
+        }
         val snapshot = service.currentSnapshot()
         if (snapshot == null) { handler.postDelayed(::tick, 400); return }
         val observation = AccessibilityObservationAdapter.adapt(snapshot, service.appVersion(snapshot.packageName))
+        beliefTracker.update(observation.evidence)
         memory.invalidate(observation.packageName, observation.appVersion)
-        if (goalReached(target.successFact, observation.facts)) { finish(AgentStatus.SUCCEEDED, "completion evidence verified"); return }
-        if (observation.packageName != target.allowedPackage) { finish(AgentStatus.BLOCKED, "package boundary crossed"); return }
+        if (observation.packageName != target.allowedPackage) {
+            finish(AgentStatus.BLOCKED, "package boundary crossed"); return
+        }
+        if (goalReached(target.successFact, observation.facts)) {
+            completionEvidenceHits++
+            if (completionEvidenceHits >= COMPLETION_QUORUM) {
+                finish(AgentStatus.SUCCEEDED, "completion evidence verified across $COMPLETION_QUORUM observations")
+            } else handler.postDelayed(::tick, 350)
+            return
+        } else completionEvidenceHits = 0
+        if (cycles >= target.maxCycles) { finish(AgentStatus.EXHAUSTED, "cycle budget exhausted"); return }
 
         val path = frames.map { it.first }.toSet() + observation.screenId
         val activeSubgoal = plan?.subgoals?.getOrNull(subgoalIndex)
@@ -125,10 +145,12 @@ class LiveAndroidAgent(
         val violations = AgentPlanValidator.validate(target, listOf(action))
         if (violations.isNotEmpty()) { finish(AgentStatus.BLOCKED, violations.joinToString { it.message }); return }
         cycles++
+        val generation = runGeneration
         emit("Apex cycle $cycles/${target.maxCycles}: ${action.kind.name.lowercase()} ${action.id.substringAfter(':').take(8)} · confidence ${(confidence * 100).toInt()}%")
         service.runGuardedAgentAction(action, target) { accepted, detail ->
-            if (cancelled) return@runGuardedAgentAction
+            if (cancelled || generation != runGeneration) return@runGuardedAgentAction
             handler.postDelayed({
+                if (cancelled || generation != runGeneration) return@postDelayed
                 val snapshot = service.currentSnapshot()
                 val after = snapshot?.let { AccessibilityObservationAdapter.adapt(it, service.appVersion(it.packageName)) }
                 val progressed = accepted && after != null &&
@@ -196,7 +218,9 @@ class LiveAndroidAgent(
         return facts.any { it.lowercase() == expected || it.lowercase() == "text:$expected" }
     }
     private fun finish(status: AgentStatus, detail: String) {
-        cancelled = true; handler.removeCallbacksAndMessages(null)
+        cancelled = true; runGeneration++; handler.removeCallbacksAndMessages(null)
         emit("Apex ${status.name.lowercase()}: $detail · $cycles cycles")
     }
+
+    private companion object { const val COMPLETION_QUORUM = 2 }
 }

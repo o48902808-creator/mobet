@@ -48,7 +48,8 @@ data class HierarchicalPlan(val goal: AgentGoal, val subgoals: List<Subgoal>)
 /** Deterministic decomposition. Model suggestions may be supplied, but are treated only as hints. */
 object HierarchicalPlanner {
     fun decompose(goal: AgentGoal, modelHints: List<ModelSubgoal> = emptyList()): HierarchicalPlan {
-        val clauses = if (modelHints.isNotEmpty()) modelHints.map { it.description } else
+        val validatedHints = ModelOutputValidator.validateSubgoals(modelHints)
+        val clauses = if (validatedHints.isNotEmpty()) validatedHints.map { it.description } else
             goal.description.split(Regex("(?i)\\bthen\\b|;|\\n")).map(String::trim).filter(String::isNotBlank)
         val subgoals = clauses.take(12).mapIndexed { index, clause ->
             Subgoal(clause,
@@ -97,7 +98,9 @@ interface ModelAssistant {
 
 object ModelOutputValidator {
     fun validateSubgoals(items: List<ModelSubgoal>): List<ModelSubgoal> = items.take(12).filter {
-        it.description.isNotBlank() && it.description.length <= 240 && it.confidence in 0.0..1.0
+        it.description.isNotBlank() && it.description.length <= 240 && it.rationale.length <= 400 &&
+            it.confidence in 0.5..1.0 &&
+            ContentTrustEngine.assess(it.description).trust != ContentTrust.UNTRUSTED_INSTRUCTION
     }
     fun validateRanking(output: ModelRanking, allowed: Set<String>): ModelRanking? =
         output.takeIf { it.confidence in 0.0..1.0 && it.actionIds.size <= 24 && it.actionIds.distinct().size == it.actionIds.size && it.actionIds.all(allowed::contains) }
