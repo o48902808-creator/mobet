@@ -22,13 +22,15 @@ The Accessibility Service is the privileged boundary. The activity parses locall
 - `AuditLedger` (audit): SHA-256 hash-chained, tamper-evident, bounded execution history with full-chain verification.
 - `AutonomousAgent` / `LiveAndroidAgent` (agent): bounded observe–deliberate–act–verify controllers. The live controller owns no accessibility nodes: it submits typed actions back through a freshly validated one-action `WorkflowRunner` and verifies a new snapshot afterward.
 - `AccessibilityObservationAdapter`: converts node-free snapshots to observations/actions, assigns structural action IDs, and maps selected actions back to typed workflow steps.
-- `Deliberator` / `HierarchicalPlanner`: deterministic, uncertainty-aware ranking and subgoal decomposition with explicit preconditions/completion evidence, learned-route utility, reversibility, and strict candidate/expansion budgets.
+- `Deliberator` / `HierarchicalPlanner` / `HierarchicalExecutor`: deterministic, uncertainty-aware ranking plus executable subgoal state with explicit preconditions/completion evidence, Bayesian learned-route utility, reversibility, and strict candidate/expansion budgets.
+- `ObservationStabilizer`: requires repeated structural observations before planning and abstains when a UI cannot settle inside its sample budget.
 - `BeliefReasoner` / `TemporalBeliefTracker`: preserve competing hypotheses and source attribution across accessibility, OCR, user, and world-model evidence; unsupported temporal evidence decays and low-confidence choices abstain.
 - `ContentTrustEngine`: treats all screen/model text as untrusted data and blocks instruction-injection patterns from becoming action authority.
 - `PersistentExperienceStore` / `ExperienceNavigator`: AES-GCM authenticated, bounded transition, outcome, repair-hash, and dead-end memory with Bayesian reliability, confidence decay, expiry, contradiction-driven drift invalidation, app-version invalidation, and cycle-safe graph search.
 - `EncryptedStateStore` (security): namespace-bound authenticated storage backed by a non-exportable Android Keystore key with atomic legacy migration.
 - `FailureClassifier` / `RecoveryPolicies`: explicit stale-selector, loading, modal, wrong-app, permission, rejection, and dead-end handling with bounded remedies.
-- `ModelAssistant` / `ModelOutputValidator`: optional structured suggestions and rankings over allowlisted candidate IDs only; no device authority.
+- `ModelAssistant` / `LocalStructuredModelAssistant` / `ModelOutputValidator`: optional structured on-device suggestions and rankings over allowlisted candidate IDs only; influence is capped and has no device authority.
+- `RunCheckpointStore` / `ResourceGovernor`: encrypted non-resuming crash evidence, irreversible replay prevention, battery/thermal limits, and operational emergency-stop support.
 - `AgentPlanValidator`: counterfactual gate for autonomous proposals, including risk, lookahead, confidence, and terminal-only irreversible constraints.
 - `AgentEvaluation`: stable success, cycle, excess-action, abstention-quality, and safety metric contracts enforced by CI tests.
 

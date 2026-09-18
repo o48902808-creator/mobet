@@ -33,7 +33,9 @@ data class AgentGoal(
     val maxRisk: Int = 29,
     val minConfidence: Double = 0.49,
     val lookaheadExpansions: Int = 32,
-    val maxRuntimeMs: Long = 120_000
+    val maxRuntimeMs: Long = 120_000,
+    val allowOcrEvidence: Boolean = false,
+    val allowModelAssistance: Boolean = false
 )
 
 data class ActionReceipt(val accepted: Boolean, val detail: String = "")
@@ -97,7 +99,10 @@ data class Deliberation(
 )
 
 /** Deterministic utility ranking with strict candidate and lookahead budgets. */
-class Deliberator(private val experience: ExperienceStore) {
+class Deliberator(
+    private val experience: ExperienceStore,
+    private val modelAssistant: ModelAssistant? = null
+) {
     fun choose(observation: AgentObservation, goal: AgentGoal, pathScreens: Set<String>): Deliberation {
         val candidates = observation.actions.asSequence()
             .filter { it.risk <= goal.maxRisk && it.trust != ContentTrust.UNTRUSTED_INSTRUCTION &&
@@ -112,6 +117,10 @@ class Deliberator(private val experience: ExperienceStore) {
         val lookahead = BudgetedLookahead(experience).simulate(observation, goal)
             .groupBy { it.actionIds.first() }.mapValues { (_, paths) -> paths.maxOf { it.utility } }
         val goalTerms = tokenize(goal.description + " " + goal.successFact)
+        val allowedIds = candidates.map { it.id }.toSet()
+        val modelRanking = modelAssistant?.rankSafeCandidates(goal, observation, allowedIds)
+            ?.let { ModelOutputValidator.validateRanking(it, allowedIds) }
+        val modelOrder = modelRanking?.actionIds?.withIndex()?.associate { it.value to it.index }.orEmpty()
         val ranked = candidates.map { action ->
             val semantic = tokenize(action.label).count { it in goalTerms } * 20.0
             val histories = known[action.id].orEmpty().take(goal.lookaheadExpansions.coerceIn(1, 64))
@@ -119,8 +128,11 @@ class Deliberator(private val experience: ExperienceStore) {
             val reliability = ExperienceStatistics.reliability(allHistory[action.id].orEmpty())
             val reversible = if (action.reversible) 4.0 else -12.0
             val simulated = (lookahead[action.id] ?: 0.0) * 0.35
+            // Model influence is deliberately capped at five utility points and can only reorder
+            // candidates already accepted by deterministic safety filtering.
+            val modelHint = modelOrder[action.id]?.let { (5.0 - it * .25).coerceAtLeast(0.0) } ?: 0.0
             val utility = semantic + learned + reliability.successProbability * reliability.confidence * 20 +
-                simulated + reversible - action.risk - (1.0 - action.confidence) * 20
+                simulated + modelHint + reversible - action.risk - (1.0 - action.confidence) * 20
             action to utility
         }.sortedWith(compareByDescending<Pair<AgentAction, Double>> { it.second }.thenBy { it.first.id })
         val best = ranked.first()

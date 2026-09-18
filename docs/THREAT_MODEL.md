@@ -25,9 +25,10 @@
 - Risk is recomputed from the canonical selector and visible label; planner-provided risk is ignored.
 - `PlanValidator`, `RiskEngine`, confirmation, `WorkflowRunner`, and post-action observation cannot be bypassed by a model.
 - Elevated and critical actions retain adjacent and hardened typed confirmation requirements.
-- Every autonomous run has package, action, cycle, runtime, candidate, depth, lookahead, and recovery limits.
-- Session generations invalidate callbacks after Stop/replacement.
-- Completion requires repeated observations rather than one transient frame.
+- Every autonomous run has package, action, cycle, runtime, candidate, depth, lookahead, recovery, battery, thermal, and UI-settling limits.
+- Session generations invalidate callbacks after Stop/replacement; encrypted crash checkpoints never trigger auto-resume or irreversible replay.
+- Completion requires repeated settled observations rather than one transient frame. Consent-controlled OCR is evidence-only, confidence-gated, never persisted, and cannot create device actions.
+- Optional model assistance can rank only pre-approved canonical action IDs, has capped utility influence, and cannot define policy or completion authority.
 - Persistent agent memory is minimized, bounded, AES-GCM authenticated, namespace-bound, and backed by Android Keystore.
 - Major app versions and repeated route contradictions invalidate learned knowledge.
 - CI tokens are read-only and checkout credentials are not persisted.

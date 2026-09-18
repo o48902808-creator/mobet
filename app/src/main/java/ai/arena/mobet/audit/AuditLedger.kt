@@ -1,6 +1,7 @@
 package ai.arena.mobet.audit
 
 import ai.arena.mobet.agent.ScreenFingerprint
+import ai.arena.mobet.security.EncryptedStateStore
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
@@ -22,7 +23,14 @@ data class LedgerEntry(
  * stays entirely on-device, and stores runner status text only — never screen content or secrets.
  */
 class AuditLedger(context: Context) {
-    private val preferences = context.getSharedPreferences("audit_ledger", Context.MODE_PRIVATE)
+    private val secureStore = EncryptedStateStore(context, "audit_ledger_v2")
+    private val legacyPreferences = context.getSharedPreferences("audit_ledger", Context.MODE_PRIVATE)
+
+    init {
+        if (secureStore.read() == null) legacyPreferences.getString("chain", null)?.let { legacy ->
+            if (secureStore.write(legacy)) legacyPreferences.edit().clear().commit()
+        }
+    }
 
     @Synchronized
     fun append(event: String) {
@@ -60,10 +68,10 @@ class AuditLedger(context: Context) {
     }
 
     @Synchronized
-    fun clear() = preferences.edit().remove("chain").apply()
+    fun clear() { secureStore.clear(); legacyPreferences.edit().clear().commit() }
 
     private fun load(): List<LedgerEntry> = try {
-        val array = JSONArray(preferences.getString("chain", null) ?: "[]")
+        val array = JSONArray(secureStore.read() ?: "[]")
         buildList {
             for (i in 0 until array.length()) {
                 val item = array.getJSONObject(i)
@@ -91,7 +99,7 @@ class AuditLedger(context: Context) {
                     .put("event", it.event).put("hash", it.hash).put("prev", it.previousHash)
             )
         }
-        preferences.edit().putString("chain", array.toString()).apply()
+        secureStore.write(array.toString())
     }
 
     private companion object {

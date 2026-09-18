@@ -19,6 +19,7 @@ import android.text.InputType
 import android.text.method.ScrollingMovementMethod
 import android.view.View
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -53,13 +54,13 @@ class MainActivity : AppCompatActivity() {
             IntentFilter(MobetAccessibilityService.ACTION_STATUS),
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
-        handleConfirmation(intent)
+        handleServiceIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleConfirmation(intent)
+        handleServiceIntent(intent)
     }
 
     override fun onResume() {
@@ -302,6 +303,16 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun handleServiceIntent(value: Intent?) {
+        if (value?.action == ACTION_STOP_AUTONOMY) {
+            intent.action = null
+            MobetAccessibilityService.instance?.stopRun()
+            showStatus("Autonomous run stopped from notification")
+            return
+        }
+        handleConfirmation(value)
+    }
+
     private fun handleConfirmation(value: Intent?) {
         if (value?.action != MobetAccessibilityService.ACTION_CONFIRM) return
         intent.action = null
@@ -400,6 +411,7 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("Private Apex memory")
             .setMessage(service.agentMemorySummary() + "\n" + service.worldModelSummary() +
+                (service.interruptedRunSummary()?.let { "\n$it" } ?: "") +
                 "\n\nAES-GCM encrypted on-device with an Android Keystore key: structural hashes, bounded transition outcomes, confidence, recency, app versions, selector-repair hashes, and dead ends. Screen text, OCR output, entered values, and screenshots are excluded. Knowledge decays; repeated contradictions and major app-version changes invalidate it.")
             .setPositiveButton("Close", null)
             .setNegativeButton("Clear all") { _, _ ->
@@ -408,6 +420,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showAutonomousGoal() {
+        val notificationPrefs = getSharedPreferences("privacy_choices", MODE_PRIVATE)
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED &&
+            !notificationPrefs.getBoolean("notification_prompted", false)
+        ) {
+            notificationPrefs.edit().putBoolean("notification_prompted", true).apply()
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 41)
+            showStatus("Notification permission requested for the emergency Stop control — tap Run goal again")
+            return
+        }
         val service = MobetAccessibilityService.instance
         val snapshot = service?.latestSnapshot()
         if (service == null || snapshot == null || snapshot.packageName == packageName) {
@@ -421,7 +443,15 @@ class MainActivity : AppCompatActivity() {
         }
         val goal = EditText(this).apply { hint = "Goal, e.g. open Network settings"; minLines = 2 }
         val evidence = EditText(this).apply { hint = "Exact completion evidence, e.g. Internet" }
-        fields.addView(goal); fields.addView(evidence)
+        val ocr = CheckBox(this).apply {
+            text = "Consent to on-device OCR for completion evidence"
+            setTextColor(Color.WHITE)
+        }
+        val model = CheckBox(this).apply {
+            text = "Use structured on-device candidate ranking"
+            setTextColor(Color.WHITE)
+        }
+        fields.addView(goal); fields.addView(evidence); fields.addView(ocr); fields.addView(model)
         AlertDialog.Builder(this)
             .setTitle("Apex autonomous run")
             .setMessage("Target: ${snapshot.packageName}\n\nApex may tap, scroll, or go back within this app for at most 20 cycles. RiskEngine, WorkflowRunner, confirmations, package limits, and live verification remain authoritative. It abstains when confidence is insufficient.")
@@ -434,7 +464,9 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     service.startAutonomous(ai.arena.mobet.agent.AgentGoal(
                         description, success, snapshot.packageName, maxCycles = 20,
-                        maxRisk = 29, minConfidence = 0.67, lookaheadExpansions = 32
+                        maxRisk = 29, minConfidence = 0.67, lookaheadExpansions = 32,
+                        allowOcrEvidence = ocr.isChecked,
+                        allowModelAssistance = model.isChecked
                     ))
                 }
             }
@@ -634,4 +666,6 @@ class MainActivity : AppCompatActivity() {
             val scale = resources.displayMetrics.density
             setMargins(0, (top * scale).toInt(), 0, (bottom * scale).toInt())
         }
+
+    companion object { const val ACTION_STOP_AUTONOMY = "ai.arena.mobet.STOP_AUTONOMY" }
 }

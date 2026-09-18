@@ -55,6 +55,33 @@ class MobetAccessibilityService : AccessibilityService() {
         liveAgent.start(goal)
     }
 
+    fun showAutonomyNotification() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return
+        val manager = getSystemService(android.app.NotificationManager::class.java)
+        val channel = android.app.NotificationChannel(
+            AUTONOMY_CHANNEL, "Active autonomous run", android.app.NotificationManager.IMPORTANCE_LOW
+        ).apply { description = "Visible control for a Mobet run started by you" }
+        manager.createNotificationChannel(channel)
+        val stopIntent = android.app.PendingIntent.getActivity(
+            this, 7,
+            Intent(this, MainActivity::class.java).setAction(MainActivity.ACTION_STOP_AUTONOMY)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = android.app.Notification.Builder(this, AUTONOMY_CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_media_pause)
+            .setContentTitle("Apex autonomous run active")
+            .setContentText("Tap Stop to revoke device operation authority")
+            .setOngoing(true).setOnlyAlertOnce(true)
+            .addAction(android.R.drawable.ic_media_pause, "Stop", stopIntent).build()
+        runCatching { manager.notify(AUTONOMY_NOTIFICATION_ID, notification) }
+    }
+
+    fun hideAutonomyNotification() =
+        getSystemService(android.app.NotificationManager::class.java).cancel(AUTONOMY_NOTIFICATION_ID)
+
     fun stopRun() {
         liveAgent.cancel("Stopped by user")
         runner?.cancel("Stopped by user")
@@ -183,6 +210,15 @@ class MobetAccessibilityService : AccessibilityService() {
             })
     }
 
+    /** Consent is captured by the autonomous-run UI. OCR supplies evidence only, never actions. */
+    fun verifyOcrEvidence(query: String, callback: (Boolean, Double) -> Unit) {
+        findVisualText(query) { found, detail, _, _ ->
+            val confidence = Regex("(\\d+)%").find(detail)?.groupValues?.getOrNull(1)
+                ?.toDoubleOrNull()?.div(100.0) ?: if (found) 0.5 else 0.0
+            callback(found, confidence.coerceIn(0.0, 1.0))
+        }
+    }
+
     fun latestSnapshot(): ScreenSnapshot? = snapshot
 
     /** Fresh snapshot for autonomous verification; node handles never cross this boundary. */
@@ -246,6 +282,7 @@ class MobetAccessibilityService : AccessibilityService() {
     }
 
     fun agentMemorySummary(): String = agentMemory.summary()
+    fun interruptedRunSummary(): String? = ai.arena.mobet.agent.RunCheckpointStore(this).interruptedSummary()
     fun clearAgentMemory() = agentMemory.clear()
 
     fun diagnosticHistory(): List<String> =
@@ -293,6 +330,8 @@ class MobetAccessibilityService : AccessibilityService() {
         const val EXTRA_STATUS = "status"
         const val EXTRA_CONFIRM_MESSAGE = "confirm_message"
         const val EXTRA_CONFIRM_HARDENED = "confirm_hardened"
+        private const val AUTONOMY_CHANNEL = "apex-active-run"
+        private const val AUTONOMY_NOTIFICATION_ID = 4890
         @Volatile var instance: MobetAccessibilityService? = null
             private set
     }

@@ -69,15 +69,19 @@ class LiveAndroidAgent(
     private val emit: (String) -> Unit
 ) {
     private val handler = Handler(Looper.getMainLooper())
-    private val deliberator = Deliberator(memory)
+    private var deliberator = Deliberator(memory)
+    private val stabilizer = ObservationStabilizer()
+    private val checkpoints = RunCheckpointStore(service)
+    private val resources = ResourceGovernor(service)
     private var goal: AgentGoal? = null
     private var plan: HierarchicalPlan? = null
-    private var subgoalIndex = 0
+    private var hierarchy: HierarchicalExecutor? = null
     private var cancelled = true
     private var cycles = 0
     private var startedAt = 0L
     private var runGeneration = 0L
     private var completionEvidenceHits = 0
+    private var ocrCheckInFlight = false
     private val beliefTracker = TemporalBeliefTracker()
     private val frames = ArrayDeque<Pair<String, String>>()
     private val recoveryAttempts = mutableMapOf<FailureKind, Int>()
@@ -86,10 +90,16 @@ class LiveAndroidAgent(
         cancel("Autonomous run replaced", quiet = true)
         require(value.maxCycles in 1..50) { "Cycle budget must be 1–50" }
         require(AgentPlanValidator.validate(value, emptyList()).isEmpty()) { "Invalid autonomous safety budget" }
-        goal = value; plan = HierarchicalPlanner.decompose(value); subgoalIndex = 0
-        cycles = 0; completionEvidenceHits = 0; startedAt = android.os.SystemClock.uptimeMillis()
-        runGeneration++; beliefTracker.clear(); frames.clear(); recoveryAttempts.clear(); cancelled = false
-        emit("Apex autonomous run started · ${plan?.subgoals?.size} subgoals · ${value.maxCycles} cycle budget")
+        goal = value
+        val assistant = if (value.allowModelAssistance) LocalStructuredModelAssistant() else null
+        val hints = assistant?.proposeSubgoals(value)?.let(ModelOutputValidator::validateSubgoals).orEmpty()
+        plan = HierarchicalPlanner.decompose(value, hints); hierarchy = plan?.let(::HierarchicalExecutor)
+        deliberator = Deliberator(memory, assistant)
+        cycles = 0; completionEvidenceHits = 0; ocrCheckInFlight = false; startedAt = android.os.SystemClock.uptimeMillis()
+        runGeneration++; beliefTracker.clear(); stabilizer.reset(); frames.clear(); recoveryAttempts.clear(); cancelled = false
+        checkpoints.start(value)
+        service.showAutonomyNotification()
+        emit("Apex autonomous run started · ${plan?.subgoals?.size} subgoals · ${value.maxCycles} cycle budget · OCR ${if (value.allowOcrEvidence) "consented" else "off"} · model ${if (value.allowModelAssistance) "local structured" else "off"}")
         if (!service.launchTarget(value.allowedPackage)) finish(AgentStatus.BLOCKED, "could not launch target package")
         else handler.postDelayed(::tick, 800)
     }
@@ -97,6 +107,7 @@ class LiveAndroidAgent(
     fun cancel(reason: String = "Autonomous run stopped", quiet: Boolean = false) {
         if (!cancelled) service.stopGuardedExecution()
         runGeneration++
+        service.hideAutonomyNotification()
         cancelled = true; handler.removeCallbacksAndMessages(null)
         if (!quiet) emit(reason)
     }
@@ -115,17 +126,45 @@ class LiveAndroidAgent(
         if (observation.packageName != target.allowedPackage) {
             finish(AgentStatus.BLOCKED, "package boundary crossed"); return
         }
+        val settling = stabilizer.offer(observation)
+        if (settling.observation == null) { handler.postDelayed(::tick, 180); return }
+        if (!settling.settled) { finish(AgentStatus.ABSTAINED, settling.reason); return }
         if (goalReached(target.successFact, observation.facts)) {
             completionEvidenceHits++
             if (completionEvidenceHits >= COMPLETION_QUORUM) {
-                finish(AgentStatus.SUCCEEDED, "completion evidence verified across $COMPLETION_QUORUM observations")
+                finish(AgentStatus.SUCCEEDED, "accessibility completion evidence verified across $COMPLETION_QUORUM observations")
             } else handler.postDelayed(::tick, 350)
             return
-        } else completionEvidenceHits = 0
+        }
+        if (target.allowOcrEvidence && !ocrCheckInFlight) {
+            val generation = runGeneration
+            ocrCheckInFlight = true
+            service.verifyOcrEvidence(target.successFact) { found, confidence ->
+                if (cancelled || generation != runGeneration) return@verifyOcrEvidence
+                ocrCheckInFlight = false
+                beliefTracker.update(listOf(ObservationEvidence(
+                    "text:${target.successFact.lowercase().trim()}", EvidenceSource.OCR, confidence
+                )))
+                if (found && confidence >= OCR_COMPLETION_CONFIDENCE) completionEvidenceHits++ else completionEvidenceHits = 0
+                if (completionEvidenceHits >= COMPLETION_QUORUM) {
+                    finish(AgentStatus.SUCCEEDED, "consented OCR completion evidence verified across $COMPLETION_QUORUM observations")
+                } else if (found) handler.postDelayed(::tick, 350)
+                else continuePlanning(observation, target)
+            }
+            return
+        }
+        completionEvidenceHits = 0
+        continuePlanning(observation, target)
+    }
+
+    private fun continuePlanning(observation: AgentObservation, target: AgentGoal) {
+        if (cancelled) return
         if (cycles >= target.maxCycles) { finish(AgentStatus.EXHAUSTED, "cycle budget exhausted"); return }
+        val resource = resources.check()
+        if (!resource.allowed) { finish(AgentStatus.BLOCKED, resource.reason); return }
 
         val path = frames.map { it.first }.toSet() + observation.screenId
-        val activeSubgoal = plan?.subgoals?.getOrNull(subgoalIndex)
+        val activeSubgoal = hierarchy?.current
         val localGoal = if (activeSubgoal == null) target else target.copy(description = activeSubgoal.description)
         val decision = deliberator.choose(observation, localGoal, path)
         val action = decision.action
@@ -145,10 +184,15 @@ class LiveAndroidAgent(
         val violations = AgentPlanValidator.validate(target, listOf(action))
         if (violations.isNotEmpty()) { finish(AgentStatus.BLOCKED, violations.joinToString { it.message }); return }
         cycles++
+        checkpoints.beforeAction(target, cycles, action)
+        stabilizer.reset()
         val generation = runGeneration
         emit("Apex cycle $cycles/${target.maxCycles}: ${action.kind.name.lowercase()} ${action.id.substringAfter(':').take(8)} · confidence ${(confidence * 100).toInt()}%")
         service.runGuardedAgentAction(action, target) { accepted, detail ->
             if (cancelled || generation != runGeneration) return@runGuardedAgentAction
+            // Once the gateway returns, an irreversible operation is never considered replayable,
+            // even if postcondition verification later fails.
+            checkpoints.afterAction(target, cycles, action)
             handler.postDelayed({
                 if (cancelled || generation != runGeneration) return@postDelayed
                 val snapshot = service.currentSnapshot()
@@ -168,10 +212,8 @@ class LiveAndroidAgent(
                     if (after.screenId in frames.map { it.first }) memory.markDeadEnd(before.screenId, action.id)
                     else if (!backtrack) {
                         frames.addLast(before.screenId to action.id)
-                        val subgoals = plan?.subgoals.orEmpty()
-                        if (subgoalIndex < subgoals.lastIndex && semanticOverlap(action.label, subgoals[subgoalIndex].description)) {
-                            emit("Apex subgoal ${subgoalIndex + 1}/${subgoals.size} completed with observed screen transition")
-                            subgoalIndex++
+                        hierarchy?.progress(after.facts, observedTransition = true, actionLabel = action.label)?.let { progress ->
+                            if (progress.completed) emit("Apex subgoal ${progress.index + 1}/${plan?.subgoals?.size} completed with verified evidence")
                         }
                     }
                 }
@@ -208,19 +250,19 @@ class LiveAndroidAgent(
         return true
     }
 
-    private fun semanticOverlap(label: String, description: String): Boolean {
-        fun terms(value: String) = value.lowercase().split(Regex("[^a-z0-9]+")).filter { it.length > 2 }.toSet()
-        return terms(label).intersect(terms(description)).isNotEmpty()
-    }
-
     private fun goalReached(successFact: String, facts: Set<String>): Boolean {
         val expected = successFact.trim().lowercase()
         return facts.any { it.lowercase() == expected || it.lowercase() == "text:$expected" }
     }
     private fun finish(status: AgentStatus, detail: String) {
+        checkpoints.finish()
+        service.hideAutonomyNotification()
         cancelled = true; runGeneration++; handler.removeCallbacksAndMessages(null)
         emit("Apex ${status.name.lowercase()}: $detail · $cycles cycles")
     }
 
-    private companion object { const val COMPLETION_QUORUM = 2 }
+    private companion object {
+        const val COMPLETION_QUORUM = 2
+        const val OCR_COMPLETION_CONFIDENCE = 0.78
+    }
 }
