@@ -23,10 +23,12 @@ object AccessibilityObservationAdapter {
             actions, facts, evidence, appVersion, snapshot.capturedAt)
     }
 
-    fun toStep(action: AgentAction): Step? = when (action.kind) {
-        AgentActionKind.BACK -> Step("back")
-        AgentActionKind.SCROLL -> Step("scroll", parseSelector(action.selector) ?: return null, message = action.label)
-        AgentActionKind.TAP -> Step("tap", parseSelector(action.selector) ?: return null, message = action.label)
+    fun toStep(action: AgentAction): Step? {
+        return when (action.kind) {
+            AgentActionKind.BACK -> Step("back")
+            AgentActionKind.SCROLL -> Step("scroll", parseSelector(action.selector) ?: return null, message = action.label)
+            AgentActionKind.TAP -> Step("tap", parseSelector(action.selector) ?: return null, message = action.label)
+        }
     }
 
     private fun toAction(element: InspectedElement): AgentAction? {
