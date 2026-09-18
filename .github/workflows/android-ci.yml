@@ -1,0 +1,67 @@
+name: Android CI
+
+on:
+  push:
+    branches: ["main", "arena/**"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  unit-tests:
+    name: Build & JVM unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      # The repository intentionally omits the Gradle wrapper JAR; CI pins Gradle itself.
+      - name: Run unit tests
+        run: gradle --no-daemon test 2>&1 | tee build-output.log; exit ${PIPESTATUS[0]}
+
+      - name: Assemble debug APK
+        run: gradle --no-daemon assembleDebug 2>&1 | tee -a build-output.log; exit ${PIPESTATUS[0]}
+
+      # Log storage CDNs are not reachable from every environment; surface failures
+      # as a commit comment so they are readable through the plain GitHub API.
+      - name: Post failure output as commit comment
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "**Android CI failure** (run ${{ github.run_id }})"
+            echo '```'
+            grep -E "e: |error:|FAILED|failed," build-output.log | head -80 || true
+            echo '---- tail ----'
+            tail -c 4000 build-output.log
+            echo '```'
+          } > comment.md
+          gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" \
+            -f body="$(cat comment.md)" || true
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: app/build/reports/tests/
+          if-no-files-found: ignore
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobet-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: ignore

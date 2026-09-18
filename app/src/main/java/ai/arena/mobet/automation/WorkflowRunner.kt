@@ -1,24 +1,43 @@
 package ai.arena.mobet.automation
 
+import ai.arena.mobet.agent.ScreenFingerprint
+import ai.arena.mobet.agent.SelectorResolver
+import ai.arena.mobet.agent.WorldModel
 import ai.arena.mobet.policy.PlanValidator
+import ai.arena.mobet.policy.RiskEngine
+import ai.arena.mobet.policy.RiskTier
 import ai.arena.mobet.security.SecretStore
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
 
+/**
+ * Sequential observe–act state machine with runtime safety rails:
+ *
+ *  - policy preflight through [PlanValidator] plus runtime package and time boundaries;
+ *  - per-step [RiskEngine] scoring — CRITICAL steps escalate to a hardened typed confirmation;
+ *  - a loop guard that fingerprints each observed screen and aborts suspected infinite loops;
+ *  - opt-in self-healing: when a selector times out and policy allows it, the closest live
+ *    element is substituted once, only for steps at or below LOW risk, and always logged;
+ *  - passive world-model learning of screen transitions for future grounded planning.
+ */
 class WorkflowRunner(
     private val service: MobetAccessibilityService,
     private val log: (String) -> Unit
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val secrets = SecretStore(service)
+    private val worldModel = WorldModel(service)
     private var cancelled = false
     private var workflow: Workflow? = null
     private var index = 0
     private var awaitingConfirmation = false
     private var nextActionApproved = false
     private var startedAt = 0L
+    private var lastFingerprint: String? = null
+    private val screenVisits = mutableMapOf<String, Int>()
+    private val healedSteps = mutableSetOf<Int>()
 
     fun start(value: Workflow) {
         val violations = PlanValidator.validate(value)
@@ -31,7 +50,11 @@ class WorkflowRunner(
         }
         workflow = value
         startedAt = SystemClock.uptimeMillis()
-        log("Policy approved “${value.name}” (${value.steps.size}/${value.policy.maxActions} actions)")
+        val elevated = value.steps.count { RiskEngine.assess(it).tier >= RiskTier.ELEVATED }
+        log(
+            "Policy approved “${value.name}” (${value.steps.size}/${value.policy.maxActions} actions, " +
+                "$elevated elevated-risk, self-healing ${if (value.policy.allowSelfHealing) "on" else "off"})"
+        )
         if (value.packageName != null && !service.launch(value.packageName)) {
             finish("Could not launch ${value.packageName}")
             return
@@ -71,6 +94,8 @@ class WorkflowRunner(
                 return
             }
         }
+        observeScreen(flow)
+        if (cancelled) return
         if (index >= flow.steps.size) {
             finish("Completed ${flow.steps.size} steps")
             return
@@ -87,7 +112,10 @@ class WorkflowRunner(
             advance(0)
             return
         }
-        log("Step ${index + 1}/${flow.steps.size}: ${step.action}")
+        val risk = RiskEngine.assess(step)
+        val riskNote = if (risk.tier >= RiskTier.ELEVATED)
+            " · risk ${risk.tier.name.lowercase()} (${risk.reasons.joinToString(", ")})" else ""
+        log("Step ${index + 1}/${flow.steps.size}: ${step.action}$riskNote")
         val approved = nextActionApproved
         if (step.action != "confirm") nextActionApproved = false
         when (step.action) {
@@ -96,7 +124,11 @@ class WorkflowRunner(
             "delay" -> advance(step.delayMs)
             "confirm" -> {
                 awaitingConfirmation = true
-                service.requestConfirmation(step.message ?: "Allow the next workflow action?")
+                // Look ahead: a CRITICAL next step upgrades this gate to a typed confirmation.
+                val nextRisk = flow.steps.getOrNull(index + 1)?.let(RiskEngine::assess)
+                val hardened = nextRisk != null && nextRisk.tier == RiskTier.CRITICAL
+                if (hardened) log("Critical next step — typed confirmation required")
+                service.requestConfirmation(step.message ?: "Allow the next workflow action?", hardened)
             }
             "tappoint", "swipe" -> {
                 if (!approved) finish("${step.action} requires an immediately preceding confirmation")
@@ -147,10 +179,47 @@ class WorkflowRunner(
         }
     }
 
+    /** Fingerprints the visible screen, feeds the world model, and trips the loop guard. */
+    private fun observeScreen(flow: Workflow) {
+        val root = service.root() ?: return
+        val packageName = root.packageName?.toString() ?: return
+        val snapshot = try {
+            ScreenInspector.inspect(root, packageName)
+        } finally {
+            root.recycle()
+        }
+        val fingerprint = ScreenFingerprint.of(snapshot)
+        val previous = lastFingerprint
+        if (previous != null && previous != fingerprint) {
+            val executed = flow.steps.getOrNull(index - 1)
+            if (executed != null) {
+                worldModel.record(packageName, previous, transitionLabel(executed), fingerprint)
+            }
+            screenVisits.clear()
+        }
+        lastFingerprint = fingerprint
+        val visits = (screenVisits[fingerprint] ?: 0) + 1
+        screenVisits[fingerprint] = visits
+        // In the current linear runner each step observes the screen once, so a legitimate run
+        // can never exceed steps + slack on one screen. The guard exists as a hard rail for
+        // future bounded replanning, where revisiting the same screen indefinitely is possible.
+        val limit = flow.steps.size + LOOP_GUARD_SLACK
+        if (visits > limit) {
+            finish("Loop guard: screen ${fingerprint.take(8)} observed $visits times without structural change")
+        }
+    }
+
+    private fun transitionLabel(step: Step): String = step.action + (
+        step.selector.viewId?.let { ":$it" }
+            ?: step.selector.text?.let { ":$it" }
+            ?: step.selector.description?.let { ":$it" }
+            ?: ""
+        )
+
     private fun expand(step: Step, variables: Map<String, String>): Step? {
         fun resolve(source: String?): String? {
-            source ?: return null
-            var result = source
+            if (source == null) return null
+            var result: String = source
             Regex("\\{\\{var:([A-Za-z0-9_.-]+)}}").findAll(source).forEach {
                 val name = it.groupValues[1]
                 val value = variables[name] ?: run {
@@ -182,7 +251,7 @@ class WorkflowRunner(
         )
     }
 
-    private fun seek(step: Step, requireAction: Boolean, action: (AccessibilityNodeInfo) -> Boolean = { true }, retry: Int = 0) {
+    private fun seek(step: Step, requireAction: Boolean, retry: Int = 0, action: (AccessibilityNodeInfo) -> Boolean = { true }) {
         val started = SystemClock.uptimeMillis()
         fun attempt() {
             if (cancelled) return
@@ -201,8 +270,42 @@ class WorkflowRunner(
     private fun retryOrFail(step: Step, requireAction: Boolean, action: (AccessibilityNodeInfo) -> Boolean, retry: Int, reason: String) {
         if (retry < step.retries) {
             log("$reason; retry ${retry + 1}/${step.retries}")
-            handler.postDelayed({ seek(step, requireAction, action, retry + 1) }, 500)
-        } else finish("$reason finding ${describe(step.selector)}")
+            handler.postDelayed({ seek(step, requireAction, retry + 1, action) }, 500)
+            return
+        }
+        val healed = tryHeal(step, reason)
+        if (healed != null) {
+            handler.postDelayed({ seek(healed, requireAction, retry, action) }, 300)
+            return
+        }
+        finish("$reason finding ${describe(step.selector)}")
+    }
+
+    /**
+     * Attempts a one-shot, policy-gated selector heal. Refuses when self-healing is disabled,
+     * the step is above LOW risk, this step was already healed once, or no live element clears
+     * the resolver's confidence and margin thresholds.
+     */
+    private fun tryHeal(step: Step, reason: String): Step? {
+        val flow = workflow ?: return null
+        if (!flow.policy.allowSelfHealing) return null
+        if (index in healedSteps) return null
+        if (RiskEngine.assess(step).tier > RiskTier.LOW) {
+            log("Self-healing skipped: step risk exceeds the healing threshold")
+            return null
+        }
+        val root = service.root() ?: return null
+        val packageName = root.packageName?.toString() ?: run { root.recycle(); return null }
+        if (packageName !in flow.policy.allowedPackages) { root.recycle(); return null }
+        val snapshot = try {
+            ScreenInspector.inspect(root, packageName)
+        } finally {
+            root.recycle()
+        }
+        val healed = SelectorResolver.heal(step.selector, snapshot) ?: return null
+        healedSteps += index
+        log("$reason; ${healed.reason}")
+        return step.copy(selector = healed.selector)
     }
 
     private fun exists(selector: Selector): Boolean {
@@ -263,5 +366,9 @@ class WorkflowRunner(
         selector.text != null -> "text “${selector.text}”"
         selector.description != null -> "description “${selector.description}”"
         else -> "a selector (none was supplied)"
+    }
+
+    private companion object {
+        const val LOOP_GUARD_SLACK = 8
     }
 }

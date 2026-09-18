@@ -124,12 +124,17 @@ class MainActivity : AppCompatActivity() {
         val planning = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         planning.addView(button("Generate plan from goal") { showGoalPlanner() }, LinearLayout.LayoutParams(0, -2, 1f))
         planning.addView(button("Validate plan policy") { validatePlan() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
+        planning.addView(button("Dry run") { dryRunPlan() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
         root.addView(planning, margins(bottom = 8))
         val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         tools.addView(button("Inspect last app screen") { showInspector() }, LinearLayout.LayoutParams(0, -2, 1f))
         tools.addView(button("Diagnostics") { showDiagnostics() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
         tools.addView(button("Captures") { showLatestCapture() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
         root.addView(tools, margins(bottom = 8))
+        val trust = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        trust.addView(button("Audit ledger") { showAuditLedger() }, LinearLayout.LayoutParams(0, -2, 1f))
+        trust.addView(button("World model") { showWorldModel() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
+        root.addView(trust, margins(bottom = 8))
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         actions.addView(button("Run") { runWorkflow() }, LinearLayout.LayoutParams(0, -2, 1f))
@@ -243,17 +248,94 @@ class MainActivity : AppCompatActivity() {
             }.show()
     }
 
+    private fun showAuditLedger() {
+        val service = MobetAccessibilityService.instance
+        if (service == null) {
+            showStatus("Enable Mobet in Accessibility settings first")
+            return
+        }
+        val ledger = service.auditLedger()
+        val verification = ledger.verify()
+        val entries = ledger.entries()
+        val header = if (verification == null)
+            "✔ Hash chain verified — ${entries.size} entries intact"
+        else "✖ INTEGRITY FAILURE: $verification"
+        val format = java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.US)
+        val body = entries.takeLast(60).joinToString("\n") {
+            "#${it.sequence} ${format.format(java.util.Date(it.timestamp))}  ${it.event}\n    ⛓ ${it.hash.take(16)}…"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Tamper-evident audit ledger")
+            .setMessage(if (entries.isEmpty()) "No ledger entries yet" else "$header\n\n$body")
+            .setPositiveButton("Close", null)
+            .setNegativeButton("Clear") { _, _ ->
+                ledger.clear()
+                showStatus("Audit ledger cleared")
+            }
+            .show()
+    }
+
+    private fun showWorldModel() {
+        val service = MobetAccessibilityService.instance
+        if (service == null) {
+            showStatus("Enable Mobet in Accessibility settings first")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Learned screen-transition graph")
+            .setMessage(
+                service.worldModelSummary() +
+                    "\n\nMobet passively learns which action moves each app from one screen to " +
+                    "another while workflows run. Only structural fingerprint hashes and the " +
+                    "selectors from your own workflows are stored — never captured screen " +
+                    "content — and the graph stays on this device."
+            )
+            .setPositiveButton("Close", null)
+            .setNegativeButton("Clear") { _, _ ->
+                service.clearWorldModel()
+                showStatus("World model cleared")
+            }
+            .show()
+    }
+
     private fun handleConfirmation(value: Intent?) {
         if (value?.action != MobetAccessibilityService.ACTION_CONFIRM) return
         intent.action = null
         val message = value.getStringExtra(MobetAccessibilityService.EXTRA_CONFIRM_MESSAGE)
             ?: "Allow the next workflow action?"
+        val hardened = value.getBooleanExtra(MobetAccessibilityService.EXTRA_CONFIRM_HARDENED, false)
+        if (!hardened) {
+            AlertDialog.Builder(this)
+                .setTitle("Workflow confirmation")
+                .setMessage(message)
+                .setCancelable(false)
+                .setPositiveButton("Approve") { _, _ ->
+                    MobetAccessibilityService.instance?.respondToConfirmation(true)
+                }
+                .setNegativeButton("Deny") { _, _ ->
+                    MobetAccessibilityService.instance?.respondToConfirmation(false)
+                }
+                .show()
+            return
+        }
+        // Hardened path: the next step is CRITICAL risk (payment, deletion, transfer…).
+        // The user must type APPROVE so a stray tap can never authorize it.
+        val scale = resources.displayMetrics.density
+        val field = EditText(this).apply { hint = "Type APPROVE to allow" }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((20 * scale).toInt(), 0, (20 * scale).toInt(), 0)
+            addView(field)
+        }
         AlertDialog.Builder(this)
-            .setTitle("Workflow confirmation")
-            .setMessage(message)
+            .setTitle("⚠ Critical action confirmation")
+            .setMessage("$message\n\nThis step was scored CRITICAL risk. Type APPROVE to continue.")
             .setCancelable(false)
-            .setPositiveButton("Approve") { _, _ ->
-                MobetAccessibilityService.instance?.respondToConfirmation(true)
+            .setView(container)
+            .setPositiveButton("Confirm") { _, _ ->
+                val approved = field.text.toString().trim().equals("APPROVE", ignoreCase = false)
+                if (!approved) showStatus("Typed confirmation did not match APPROVE — action denied")
+                MobetAccessibilityService.instance?.respondToConfirmation(approved)
             }
             .setNegativeButton("Deny") { _, _ ->
                 MobetAccessibilityService.instance?.respondToConfirmation(false)
@@ -332,6 +414,29 @@ class MainActivity : AppCompatActivity() {
                     .onFailure { showStatus("Planner rejected goal: ${it.message}") }
             }
             .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun dryRunPlan() {
+        try {
+            val workflow = Workflow.parse(editor.text.toString())
+            val snapshot = MobetAccessibilityService.instance?.latestSnapshot()
+            val report = ai.arena.mobet.planner.PlanSimulator.simulate(workflow, snapshot)
+            val view = TextView(this).apply {
+                text = report
+                typeface = android.graphics.Typeface.MONOSPACE
+                textSize = 12f
+                val pad = (16 * resources.displayMetrics.density).toInt()
+                setPadding(pad, pad / 2, pad, pad / 2)
+            }
+            val scroll = ScrollView(this).apply { addView(view) }
+            AlertDialog.Builder(this)
+                .setTitle("Counterfactual dry run")
+                .setView(scroll)
+                .setPositiveButton("Close", null)
+                .show()
+        } catch (error: Exception) {
+            showStatus("Invalid workflow: ${error.message}")
+        }
     }
 
     private fun validatePlan() {
