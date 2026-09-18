@@ -12,6 +12,8 @@ class MobetAccessibilityService : AccessibilityService() {
     private val recorder by lazy { InteractionRecorder(packageName) }
     private val ledger by lazy { ai.arena.mobet.audit.AuditLedger(this) }
     private val worldModel by lazy { ai.arena.mobet.agent.WorldModel(this) }
+    private val agentMemory by lazy { ai.arena.mobet.agent.PersistentExperienceStore(this) }
+    private val liveAgent by lazy { ai.arena.mobet.agent.LiveAndroidAgent(this, agentMemory, ::emit) }
     private var lastInspectionAt = 0L
     @Volatile private var snapshot: ScreenSnapshot? = null
 
@@ -33,22 +35,35 @@ class MobetAccessibilityService : AccessibilityService() {
             }
         }
     }
-    override fun onInterrupt() { runner?.cancel("Interrupted") }
+    override fun onInterrupt() { liveAgent.cancel("Interrupted"); runner?.cancel("Interrupted") }
 
     override fun onDestroy() {
+        liveAgent.cancel("Service stopped", quiet = true)
         runner?.cancel("Service stopped")
         if (instance === this) instance = null
         super.onDestroy()
     }
 
     fun run(workflow: Workflow) {
+        liveAgent.cancel("Autonomous run replaced by workflow", quiet = true)
         runner?.cancel("Replaced by a new run")
         runner = WorkflowRunner(this, ::emit).also { it.start(workflow) }
     }
 
-    fun stopRun() = runner?.cancel("Stopped by user")
+    fun startAutonomous(goal: ai.arena.mobet.agent.AgentGoal) {
+        runner?.cancel("Replaced by autonomous run")
+        liveAgent.start(goal)
+    }
+
+    fun stopRun() {
+        liveAgent.cancel("Stopped by user")
+        runner?.cancel("Stopped by user")
+    }
+
+    internal fun stopGuardedExecution() = runner?.cancel("Guarded action stopped")
 
     fun startRecording() {
+        liveAgent.cancel("Recording started", quiet = true)
         runner?.cancel("Recording started")
         recorder.start()
         emit("Recording taps — switch to the target app")
@@ -169,6 +184,55 @@ class MobetAccessibilityService : AccessibilityService() {
     }
 
     fun latestSnapshot(): ScreenSnapshot? = snapshot
+
+    /** Fresh snapshot for autonomous verification; node handles never cross this boundary. */
+    fun currentSnapshot(): ScreenSnapshot? {
+        val root = rootInActiveWindow ?: return snapshot
+        return try {
+            val pkg = root.packageName?.toString() ?: return snapshot
+            ScreenInspector.inspect(root, pkg).also { if (pkg != packageName) snapshot = it }
+        } finally { root.recycle() }
+    }
+
+    fun appVersion(targetPackage: String): String? = try {
+        @Suppress("DEPRECATION") packageManager.getPackageInfo(targetPackage, 0).versionName
+    } catch (_: Exception) { null }
+
+    /**
+     * Non-bypassable action gateway used by the live agent. Risk is recomputed from the translated
+     * step; AgentAction.risk is never trusted. WorkflowRunner remains the sole device executor.
+     */
+    fun runGuardedAgentAction(
+        action: ai.arena.mobet.agent.AgentAction,
+        goal: ai.arena.mobet.agent.AgentGoal,
+        callback: (Boolean, String) -> Unit
+    ) {
+        val step = ai.arena.mobet.agent.AccessibilityObservationAdapter.toStep(action)
+        if (step == null) { callback(false, "unsupported or malformed agent action"); return }
+        val assessment = ai.arena.mobet.policy.RiskEngine.assess(step)
+        if (assessment.score > goal.maxRisk) { callback(false, "RiskEngine blocked score ${assessment.score}"); return }
+        val steps = if (assessment.tier >= ai.arena.mobet.policy.RiskTier.ELEVATED) {
+            listOf(Step("confirm", message = "Apex proposes: ${action.label}"), step)
+        } else listOf(step)
+        val policy = ai.arena.mobet.policy.AutomationPolicy(
+            allowedPackages = setOf(goal.allowedPackage),
+            allowedActions = steps.map { it.action }.toSet(),
+            maxActions = steps.size,
+            maxRuntimeMs = 30_000,
+            allowVisualFallbacks = false,
+            allowSelfHealing = false
+        )
+        val workflow = Workflow("Apex guarded action", goal.allowedPackage, emptyMap(), steps, policy)
+        val violations = ai.arena.mobet.policy.PlanValidator.validate(workflow)
+        if (violations.isNotEmpty()) { callback(false, "PlanValidator blocked: ${violations.joinToString { it.message }}"); return }
+        runner?.cancel("Replaced by next guarded action")
+        runner = WorkflowRunner(
+            this, ::emit, callback, launchTarget = false, enforcePackageAtFirstStep = true
+        ).also { it.start(workflow) }
+    }
+
+    fun agentMemorySummary(): String = agentMemory.summary()
+    fun clearAgentMemory() = agentMemory.clear()
 
     fun diagnosticHistory(): List<String> =
         getSharedPreferences("diagnostics", MODE_PRIVATE).getString("events", "")

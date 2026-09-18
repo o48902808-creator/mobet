@@ -2,13 +2,19 @@
 
 Mobet is an Android-first, on-device mobile automation prototype. It uses Android's Accessibility API to locate controls and run explicit JSON workflows that the phone owner starts.
 
-## Frontier capabilities (v0.3.1)
+## Frontier capabilities (v0.4.0)
 
+- **Live Apex Android agent** — accessibility snapshots are converted into node-free `AgentObservation`s and selected tap/scroll/back actions return through a narrow guarded gateway. Every operation is translated to a typed workflow, rescored by `RiskEngine`, validated by `PlanValidator`, confirmed when required, and executed only by `WorkflowRunner`. The UI exposes bounded goal runs with explicit completion evidence and Stop.
+- **Persistent private memory** — successful and failed transitions, dead ends, selector-repair hashes, confidence, recency, and app-version metadata survive restarts. Confidence decays over 45 days, dead ends expire, major app versions invalidate old routes, storage is bounded, and screen/OCR text, entered values, secrets, and screenshots are excluded.
+- **Hierarchical, uncertainty-aware planning** — goals decompose into subgoals with explicit preconditions and completion evidence. Accessibility, optional OCR, user, and world-model evidence remain separately attributed in a belief state; ambiguous candidates cause abstention instead of a guess.
+- **Budgeted lookahead and recovery** — deterministic candidate ranking has hard action and expansion caps and optimizes learned success, semantic fit, risk, confidence, and reversibility. Failures are classified as stale selectors, loading delays, modal interruptions, wrong app, permission gates, device rejection, or dead ends, each with a bounded recovery policy.
+- **Non-authoritative model boundary** — an optional model can return only structured subgoal suggestions or rankings over already-safe action IDs. Schema validation rejects unknown IDs; models never receive accessibility authority and cannot bypass policy, confirmation, execution, or verification.
+- **Intelligence regression gates** — deterministic benchmarks track success, cycles, unnecessary actions, abstention quality, and safety violations with CI-enforced thresholds.
 - **Bounded autonomous intelligence** — a platform-neutral `AutonomousAgent` repeatedly observes, deliberates, acts, and verifies instead of blindly replaying a plan. Package, risk, and cycle budgets remain hard boundaries enforced independently of the deliberation policy.
 - **Verified exploration and backtracking** — safe reversible actions may be explored when no learned route exists. Unchanged screens, rejected actions, loops, and exhausted branches become dead ends; the agent backtracks rather than repeating them.
 - **Experience-guided navigation** — a bounded `ExperienceStore` retains successful transitions and dead ends. `ExperienceNavigator` searches this learned graph without cycles, while every proposed action remains subject to live verification.
 - **Counterfactual agent validation** — autonomous proposals are rejected if they exceed risk or cycle limits, and irreversible actions may only be terminal. The device adapter retains final authority over execution.
-- **Deterministic autonomy benchmark** — ten synthetic navigation tasks must maintain a 100% success rate in no more than 30 total action cycles, alongside focused tests for risk abstention, graph cycles, dead-end memory, and backtracking.
+- **Deterministic autonomy benchmark** — thirty synthetic navigation tasks must maintain a 100% success rate in no more than 90 total action cycles, alongside focused tests for risk abstention, graph cycles, dead-end memory, belief ambiguity, failure policies, and backtracking.
 - **Graduated risk engine** — every step is scored by a deterministic, explainable `RiskEngine` (consequential, destructive, financial, and credential signals are additive). `ELEVATED` steps require an adjacent confirm; `CRITICAL` steps (e.g. "Confirm transfer of $500") escalate to a **hardened typed confirmation** where the user must literally type `APPROVE`.
 - **Self-healing selectors (opt-in)** — when an app update renames "Network & internet" to "Network and internet" or rotates a resource ID, the runner can heal the selector against the live screen using blended Jaccard + Levenshtein similarity. Healing is policy-gated (`allowSelfHealing`), limited to LOW-risk steps, one-shot per step, requires both a confidence floor *and* a margin over the runner-up so it abstains rather than guesses, and every heal is logged.
 - **Counterfactual dry run** — `Dry run` statically walks the plan against the last accessibility snapshot without touching the device: per-step grounding grades (✔ / ≈ / ✖), risk tiers, confirmation gates, and an estimated duration. Secret and literal fill values are masked in the report.
@@ -108,7 +114,7 @@ Define non-sensitive values in the root `variables` object and reference them as
 ## Safety and platform notes
 
 - Android displays a strong warning when enabling accessibility access because this capability can read and operate screen content. Only enable services you trust.
-- Mobet runs only a workflow explicitly started in its foreground UI and offers Stop. Use blocking `confirm` steps before sensitive actions; remote triggers and AI planning remain disabled.
+- Mobet runs only a workflow or bounded Apex goal explicitly started in its foreground UI and offers Stop. Sensitive actions still require blocking confirmation; remote triggers remain disabled, and optional model assistance has no execution authority.
 - `QUERY_ALL_PACKAGES` supports user-authored package targets in sideloaded builds. Google Play restricts this permission; a Play-distributed edition should use declared package visibility or a user-selected app model.
 - Secure fields, CAPTCHAs, biometrics, protected windows, and apps with poor accessibility metadata may not be automatable and should not be bypassed.
 - iOS does not permit an ordinary installed app to control arbitrary other apps; Android is the initial target.
@@ -182,6 +188,6 @@ GitHub Actions (`.github/workflows/android-ci.yml`) runs both on every push and 
 
 ## Next milestones
 
-1. Multi-screen observe-plan-act loop with bounded replanning driven by the learned world model
-2. Instrumented on-device test suite and signed APK pipeline
+1. Instrumented on-device coverage for OEM-specific accessibility trees and interruption handling
+2. Signed APK pipeline plus reproducible release provenance
 3. Performance, compatibility, and accessibility hardening across real devices

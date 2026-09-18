@@ -24,12 +24,17 @@ import android.view.accessibility.AccessibilityNodeInfo
  */
 class WorkflowRunner(
     private val service: MobetAccessibilityService,
-    private val log: (String) -> Unit
+    private val log: (String) -> Unit,
+    private val onFinished: ((Boolean, String) -> Unit)? = null,
+    private val launchTarget: Boolean = true,
+    private val enforcePackageAtFirstStep: Boolean = false
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val secrets = SecretStore(service)
     private val worldModel = WorldModel(service)
+    private val agentMemory = ai.arena.mobet.agent.PersistentExperienceStore(service)
     private var cancelled = false
+    private var completionDelivered = false
     private var workflow: Workflow? = null
     private var index = 0
     private var awaitingConfirmation = false
@@ -42,10 +47,9 @@ class WorkflowRunner(
     fun start(value: Workflow) {
         val violations = PlanValidator.validate(value)
         if (violations.isNotEmpty()) {
-            log("Policy rejected plan: " + violations.joinToString("; ") {
+            finish("Policy rejected plan: " + violations.joinToString("; ") {
                 (it.step?.let { step -> "step $step: " } ?: "") + it.message
             })
-            cancelled = true
             return
         }
         workflow = value
@@ -55,7 +59,7 @@ class WorkflowRunner(
             "Policy approved “${value.name}” (${value.steps.size}/${value.policy.maxActions} actions, " +
                 "$elevated elevated-risk, self-healing ${if (value.policy.allowSelfHealing) "on" else "off"})"
         )
-        if (value.packageName != null && !service.launch(value.packageName)) {
+        if (launchTarget && value.packageName != null && !service.launch(value.packageName)) {
             finish("Could not launch ${value.packageName}")
             return
         }
@@ -68,6 +72,10 @@ class WorkflowRunner(
         awaitingConfirmation = false
         handler.removeCallbacksAndMessages(null)
         log(reason)
+        if (!completionDelivered) {
+            completionDelivered = true
+            onFinished?.invoke(false, reason)
+        }
     }
 
     fun confirmationResult(approved: Boolean) {
@@ -87,12 +95,10 @@ class WorkflowRunner(
             finish("Runtime budget exceeded (${flow.policy.maxRuntimeMs} ms)")
             return
         }
-        if (index > 0) {
-            val activePackage = service.activePackageName()
-            if (activePackage != null && activePackage !in flow.policy.allowedPackages) {
-                finish("Package boundary blocked action in $activePackage")
-                return
-            }
+        val activePackage = service.activePackageName()
+        if ((index > 0 || enforcePackageAtFirstStep) && activePackage != null && activePackage !in flow.policy.allowedPackages) {
+            finish("Package boundary blocked action in $activePackage")
+            return
         }
         observeScreen(flow)
         if (cancelled) return
@@ -304,7 +310,8 @@ class WorkflowRunner(
         }
         val healed = SelectorResolver.heal(step.selector, snapshot) ?: return null
         healedSteps += index
-        log("$reason; ${healed.reason}")
+        agentMemory.recordRepair(packageName, serialize(step.selector), serialize(healed.selector), service.appVersion(packageName))
+        log("$reason; selector repaired via ${healed.selector.let { if (it.viewId != null) "viewId" else if (it.description != null) "description" else "text" }} (${(healed.confidence * 100).toInt()}%)")
         return step.copy(selector = healed.selector)
     }
 
@@ -359,7 +366,16 @@ class WorkflowRunner(
         awaitingConfirmation = false
         handler.removeCallbacksAndMessages(null)
         log(message)
+        if (!completionDelivered) {
+            completionDelivered = true
+            onFinished?.invoke(message.startsWith("Completed"), message)
+        }
     }
+
+    private fun serialize(selector: Selector) = listOfNotNull(
+        selector.viewId?.let { "id:$it" }, selector.text?.let { "text:$it" },
+        selector.description?.let { "description:$it" }
+    ).joinToString("|")
 
     private fun describe(selector: Selector) = when {
         selector.viewId != null -> "id “${selector.viewId}”"

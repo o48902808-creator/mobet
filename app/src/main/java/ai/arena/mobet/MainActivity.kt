@@ -42,6 +42,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Workflow JSON, confirmation prompts, and secret metadata must not leak through recents or
+        // third-party screenshots. Consented captures target the other app via Accessibility.
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
         title = "Mobet"
         setContentView(buildUi())
         ContextCompat.registerReceiver(
@@ -122,8 +125,8 @@ class MainActivity : AppCompatActivity() {
         root.addView(library, margins(bottom = 8))
         root.addView(button("Record taps and scrolls in an app") { startRecorder() }, margins(bottom = 8))
         val planning = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        planning.addView(button("Generate plan from goal") { showGoalPlanner() }, LinearLayout.LayoutParams(0, -2, 1f))
-        planning.addView(button("Validate plan policy") { validatePlan() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
+        planning.addView(button("Generate plan") { showGoalPlanner() }, LinearLayout.LayoutParams(0, -2, 1f))
+        planning.addView(button("Run goal autonomously") { showAutonomousGoal() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
         planning.addView(button("Dry run") { dryRunPlan() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
         root.addView(planning, margins(bottom = 8))
         val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -133,7 +136,8 @@ class MainActivity : AppCompatActivity() {
         root.addView(tools, margins(bottom = 8))
         val trust = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         trust.addView(button("Audit ledger") { showAuditLedger() }, LinearLayout.LayoutParams(0, -2, 1f))
-        trust.addView(button("World model") { showWorldModel() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
+        trust.addView(button("Agent memory") { showAgentMemory() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
+        trust.addView(button("Validate policy") { validatePlan() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = 8 })
         root.addView(trust, margins(bottom = 8))
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -385,6 +389,53 @@ class MainActivity : AppCompatActivity() {
                     showStatus("Encrypted secret saved")
                 } catch (error: Exception) {
                     showStatus("Could not save secret: ${error.message}")
+                }
+            }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun showAgentMemory() {
+        val service = MobetAccessibilityService.instance
+        if (service == null) { showStatus("Enable Mobet in Accessibility settings first"); return }
+        AlertDialog.Builder(this)
+            .setTitle("Private Apex memory")
+            .setMessage(service.agentMemorySummary() + "\n" + service.worldModelSummary() +
+                "\n\nStored locally: structural hashes, bounded transition outcomes, confidence, recency, app versions, selector-repair hashes, and dead ends. Screen text, OCR output, entered values, and screenshots are excluded. Knowledge decays and major app-version changes invalidate it.")
+            .setPositiveButton("Close", null)
+            .setNegativeButton("Clear all") { _, _ ->
+                service.clearAgentMemory(); service.clearWorldModel(); showStatus("Agent memory cleared")
+            }.show()
+    }
+
+    private fun showAutonomousGoal() {
+        val service = MobetAccessibilityService.instance
+        val snapshot = service?.latestSnapshot()
+        if (service == null || snapshot == null || snapshot.packageName == packageName) {
+            showStatus("Visit the target app first, then return to start a grounded goal")
+            return
+        }
+        val scale = resources.displayMetrics.density
+        val fields = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((20 * scale).toInt(), 0, (20 * scale).toInt(), 0)
+        }
+        val goal = EditText(this).apply { hint = "Goal, e.g. open Network settings"; minLines = 2 }
+        val evidence = EditText(this).apply { hint = "Exact completion evidence, e.g. Internet" }
+        fields.addView(goal); fields.addView(evidence)
+        AlertDialog.Builder(this)
+            .setTitle("Apex autonomous run")
+            .setMessage("Target: ${snapshot.packageName}\n\nApex may tap, scroll, or go back within this app for at most 20 cycles. RiskEngine, WorkflowRunner, confirmations, package limits, and live verification remain authoritative. It abstains when confidence is insufficient.")
+            .setView(fields)
+            .setPositiveButton("Start bounded run") { _, _ ->
+                val description = goal.text.toString().trim()
+                val success = evidence.text.toString().trim()
+                if (description.isBlank() || success.isBlank()) {
+                    showStatus("Goal and exact completion evidence are required")
+                } else {
+                    service.startAutonomous(ai.arena.mobet.agent.AgentGoal(
+                        description, success, snapshot.packageName, maxCycles = 20,
+                        maxRisk = 29, minConfidence = 0.67, lookaheadExpansions = 32
+                    ))
                 }
             }
             .setNegativeButton("Cancel", null).show()

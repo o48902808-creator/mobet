@@ -6,10 +6,10 @@ import org.junit.Test
 
 class AgentBenchmarkTest {
     @Test
-    fun `solves ten navigation tasks within thirty total cycles`() {
+    fun `solves thirty navigation tasks within ninety total cycles`() {
         var successes = 0
         var totalCycles = 0
-        repeat(10) { task ->
+        repeat(30) { task ->
             val target = "destination-$task"
             val device = GraphDevice(
                 start = "home-$task",
@@ -35,8 +35,8 @@ class AgentBenchmarkTest {
             if (result.status == AgentStatus.SUCCEEDED) successes++
             totalCycles += result.cycles
         }
-        assertEquals("benchmark success rate", 10, successes)
-        assertTrue("expected <= 30 cycles, was $totalCycles", totalCycles <= 30)
+        assertEquals("benchmark success rate", 30, successes)
+        assertTrue("expected <= 90 cycles, was $totalCycles", totalCycles <= 90)
     }
 
     @Test
