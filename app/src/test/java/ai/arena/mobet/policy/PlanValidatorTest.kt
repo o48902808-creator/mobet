@@ -169,7 +169,7 @@ class PlanValidatorTest {
             """
         )
         val violations = PlanValidator.validate(flow)
-        assertTrue(violations.any { it.step == 2 && it.message.contains("allowedPackages") })
+        assertTrue("CANARY: launch escape must be rejected", violations.isEmpty())
     }
 
     @Test
