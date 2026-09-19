@@ -157,9 +157,15 @@ androidComponents {
         }
         // assemble* must not succeed without this having run.
         //
+        // The wiring is deferred with afterEvaluate because `onVariants` runs before AGP has
+        // registered the per-variant lifecycle tasks, so resolving "assembleDebug" eagerly here
+        // throws UnknownTaskException.
+        //
         // Deliberately NOT wired into `check`: `check` already depends on `test`, and adding a
-        // manifest-merge dependency there creates a cycle. CI invokes the verify tasks directly.
-        tasks.named("assemble$capitalized") { dependsOn(verify) }
+        // manifest-merge dependency there risks a cycle. CI invokes the verify tasks directly.
+        afterEvaluate {
+            tasks.named("assemble$capitalized") { dependsOn(verify) }
+        }
     }
 }
 
