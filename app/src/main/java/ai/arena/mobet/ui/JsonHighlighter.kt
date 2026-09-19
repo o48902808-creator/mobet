@@ -35,7 +35,7 @@ class JsonHighlighter(
 
         var i = 0
         while (i < text.length) {
-            when (val c = text[i]) {
+            when (text[i]) {
                 '"' -> {
                     val end = endOfString(text, i)
                     // A string followed by ':' is a key; anything else is a value.
@@ -61,7 +61,6 @@ class JsonHighlighter(
                 }
                 else -> i++
             }
-            if (c == '\u0000') break
         }
     }
 
