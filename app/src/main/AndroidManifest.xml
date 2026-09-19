@@ -25,6 +25,29 @@
             </intent-filter>
         </activity>
 
+        <!-- Posts a reminder notification at a chosen time. It never starts a workflow:
+             the user still opens Mobet and presses Run, preserving the invariant that every
+             device action is explicitly user-initiated. -->
+        <receiver
+            android:name=".automation.RunReminder$Receiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="ai.arena.mobet.REMINDER_FIRE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Scoped strictly to files/exports/ so sharing a workflow cannot leak captures,
+             secrets, or ledger data. Not exported; access is granted per-URI at share time. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.exports"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <service
             android:name=".automation.MobetAccessibilityService"
             android:exported="false"

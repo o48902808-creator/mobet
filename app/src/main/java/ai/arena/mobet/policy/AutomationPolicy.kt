@@ -12,7 +12,7 @@ data class AutomationPolicy(
 ) {
     companion object {
         val DEFAULT_ACTIONS = setOf(
-            "wait", "tap", "fill", "scroll", "delay", "confirm", "back", "home"
+            "wait", "tap", "fill", "scroll", "delay", "confirm", "back", "home", "launch"
         )
     }
 }
@@ -42,6 +42,16 @@ object PlanValidator {
                 add(PolicyViolation(index + 1, "Action “${step.action}” is not allowed"))
             if (step.action in visualActions && !policy.allowVisualFallbacks)
                 add(PolicyViolation(index + 1, "Visual fallback is disabled by policy"))
+            // `launch` is the only action that can move automation into another app, so the
+            // destination must be declared in the same allowlist that bounds the whole run.
+            // Without this a recorded or model-proposed plan could escape the target package.
+            if (step.action == "launch") {
+                val target = step.packageName
+                if (target.isNullOrBlank())
+                    add(PolicyViolation(index + 1, "launch requires a package"))
+                else if (target !in policy.allowedPackages)
+                    add(PolicyViolation(index + 1, "launch target “$target” is not in policy.allowedPackages"))
+            }
             val risk = RiskEngine.assess(step)
             if (risk.tier >= RiskTier.ELEVATED &&
                 workflow.steps.getOrNull(index - 1)?.action != "confirm"

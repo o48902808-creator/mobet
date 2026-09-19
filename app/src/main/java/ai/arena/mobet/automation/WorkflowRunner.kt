@@ -125,6 +125,25 @@ class WorkflowRunner(
         val approved = nextActionApproved
         if (step.action != "confirm") nextActionApproved = false
         when (step.action) {
+            // Cross-app switching. The destination was validated against policy.allowedPackages
+            // by PlanValidator; it is re-checked here so a mutated plan cannot widen the boundary
+            // at execution time. The post-launch settle delay lets the new app's window attach
+            // before the next step observes the screen.
+            "launch" -> {
+                val target = step.packageName
+                if (target.isNullOrBlank()) finish("launch requires a package")
+                else if (target !in flow.policy.allowedPackages)
+                    finish("launch target $target is not in policy.allowedPackages")
+                else if (!service.launch(target)) finish("Could not launch $target")
+                else {
+                    log("Launched $target")
+                    // Treat the switch as a fresh screen so the loop guard does not attribute
+                    // the previous app's fingerprints to the new one.
+                    lastFingerprint = null
+                    screenVisits.clear()
+                    advance(maxOf(step.delayMs, LAUNCH_SETTLE_MS))
+                }
+            }
             "back" -> complete(service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK), step)
             "home" -> complete(service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME), step)
             "delay" -> advance(step.delayMs)
@@ -386,5 +405,8 @@ class WorkflowRunner(
 
     private companion object {
         const val LOOP_GUARD_SLACK = 8
+
+        /** Minimum settle time after switching apps, so the new window is attached. */
+        const val LAUNCH_SETTLE_MS = 900L
     }
 }

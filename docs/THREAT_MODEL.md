@@ -32,6 +32,9 @@
 - Persistent agent memory is minimized, bounded, AES-GCM authenticated, namespace-bound, and backed by Android Keystore.
 - Major app versions and repeated route contradictions invalidate learned knowledge.
 - CI tokens are read-only and checkout credentials are not persisted.
+- `launch` is the only action that can move automation into another app; its destination must appear in `policy.allowedPackages`, is validated statically by `PlanValidator`, and is re-checked against the same allowlist immediately before the switch.
+- Scheduling posts a reminder notification only. Workflows are never started unattended, preserving the requirement that a user is present to answer confirmations and press Stop.
+- Exported bundles contain workflow JSON only. Secret values are never read or written by the export path; a `{{secret:name}}` reference is exported without its value, and the `FileProvider` is scoped to a dedicated exports directory so captures, memory, and the ledger are unreachable.
 
 ## Privacy posture
 

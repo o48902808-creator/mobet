@@ -125,4 +125,94 @@ class PlanValidatorTest {
         )
         assertTrue(flow.policy.allowSelfHealing)
     }
+
+    // ── launch: the only action that can move automation into another app ────
+
+    @Test
+    fun launchWithinAllowlistPasses() {
+        val flow = workflow(
+            """
+            {
+              "name": "cross-app",
+              "package": "com.example.notes",
+              "policy": {
+                "allowedPackages": ["com.example.notes", "com.example.mail"],
+                "allowedActions": ["wait", "tap", "launch"]
+              },
+              "steps": [
+                { "action": "wait", "text": "Notes" },
+                { "action": "launch", "package": "com.example.mail" },
+                { "action": "wait", "text": "Inbox" }
+              ]
+            }
+            """
+        )
+        assertEquals(emptyList<PolicyViolation>(), PlanValidator.validate(flow))
+    }
+
+    @Test
+    fun launchOutsideAllowlistIsRejected() {
+        val flow = workflow(
+            """
+            {
+              "name": "escape",
+              "package": "com.example.notes",
+              "policy": {
+                "allowedPackages": ["com.example.notes"],
+                "allowedActions": ["wait", "launch"]
+              },
+              "steps": [
+                { "action": "wait", "text": "Notes" },
+                { "action": "launch", "package": "com.attacker.bank" }
+              ]
+            }
+            """
+        )
+        val violations = PlanValidator.validate(flow)
+        assertTrue(violations.any { it.step == 2 && it.message.contains("allowedPackages") })
+    }
+
+    @Test
+    fun launchWithoutPackageIsRejected() {
+        val flow = workflow(
+            """
+            {
+              "name": "no target",
+              "package": "com.example.notes",
+              "policy": {
+                "allowedPackages": ["com.example.notes"],
+                "allowedActions": ["wait", "launch"]
+              },
+              "steps": [
+                { "action": "wait", "text": "Notes" },
+                { "action": "launch" }
+              ]
+            }
+            """
+        )
+        val violations = PlanValidator.validate(flow)
+        assertTrue(violations.any { it.step == 2 && it.message.contains("requires a package") })
+    }
+
+    @Test
+    fun launchNotInAllowedActionsIsRejected() {
+        val flow = workflow(
+            """
+            {
+              "name": "action not permitted",
+              "package": "com.example.notes",
+              "policy": {
+                "allowedPackages": ["com.example.notes", "com.example.mail"],
+                "allowedActions": ["wait", "tap"]
+              },
+              "steps": [
+                { "action": "wait", "text": "Notes" },
+                { "action": "launch", "package": "com.example.mail" }
+              ]
+            }
+            """
+        )
+        val violations = PlanValidator.validate(flow)
+        assertTrue(violations.any { it.step == 2 && it.message.contains("not allowed") })
+    }
 }

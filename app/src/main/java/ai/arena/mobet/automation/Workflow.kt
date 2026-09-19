@@ -13,6 +13,14 @@ data class Step(
     val action: String,
     val selector: Selector = Selector(),
     val value: String? = null,
+    /**
+     * Target package for the `launch` action.
+     *
+     * This is never trusted on its own: [PlanValidator] rejects a launch whose package is not in
+     * `policy.allowedPackages`, and the runner re-checks membership immediately before switching
+     * apps. Cross-app automation therefore stays inside the allowlist the user authored.
+     */
+    val packageName: String? = null,
     val timeoutMs: Long = 5_000,
     val delayMs: Long = 300,
     val retries: Int = 0,
@@ -53,6 +61,7 @@ data class Workflow(
                                 description = optional(item, "description")
                             ),
                             value = optional(item, "value"),
+                            packageName = optional(item, "package"),
                             timeoutMs = item.optLong("timeoutMs", 5_000).coerceIn(100, 60_000),
                             delayMs = item.optLong("delayMs", 300).coerceIn(0, 10_000),
                             retries = item.optInt("retries", 0).coerceIn(0, 10),

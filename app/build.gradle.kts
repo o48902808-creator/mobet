@@ -19,6 +19,50 @@ android {
 
     buildFeatures { buildConfig = true }
 
+    /*
+     * Release signing.
+     *
+     * A debug-signed APK is signed with a key that differs per build machine, so users hit
+     * INSTALL_FAILED_UPDATE_INCOMPATIBLE and must uninstall — which, with allowBackup=false,
+     * destroys their workflow library. Supplying a real keystore keeps updates in place.
+     *
+     * Credentials come from environment variables (CI secrets) or local.properties, and are
+     * never committed. When absent the release build simply stays unsigned rather than
+     * silently falling back to the debug key.
+     */
+    val keystorePath = System.getenv("MOBET_KEYSTORE_PATH")
+        ?: project.findProperty("mobet.keystore.path") as String?
+    val keystorePassword = System.getenv("MOBET_KEYSTORE_PASSWORD")
+        ?: project.findProperty("mobet.keystore.password") as String?
+    val keyAliasName = System.getenv("MOBET_KEY_ALIAS")
+        ?: project.findProperty("mobet.key.alias") as String?
+    val keyPasswordValue = System.getenv("MOBET_KEY_PASSWORD")
+        ?: project.findProperty("mobet.key.password") as String?
+    val hasSigningMaterial = !keystorePath.isNullOrBlank() &&
+        !keystorePassword.isNullOrBlank() &&
+        !keyAliasName.isNullOrBlank() &&
+        !keyPasswordValue.isNullOrBlank()
+
+    signingConfigs {
+        if (hasSigningMaterial) {
+            create("release") {
+                storeFile = file(keystorePath!!)
+                storePassword = keystorePassword
+                keyAlias = keyAliasName
+                keyPassword = keyPasswordValue
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            if (hasSigningMaterial) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

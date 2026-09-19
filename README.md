@@ -175,6 +175,47 @@ Define non-sensitive values in the root `variables` object and reference them as
 }
 ```
 
+### Cross-app workflows
+
+`launch` switches automation to another application, enabling workflows that span apps.
+It is the only action that can move Mobet outside the current package, so the destination
+**must** also appear in `policy.allowedPackages`: `PlanValidator` rejects the plan otherwise,
+and the runner re-checks the allowlist immediately before switching.
+
+```json
+{
+  "package": "com.example.notes",
+  "policy": {
+    "allowedPackages": ["com.example.notes", "com.example.mail"],
+    "allowedActions": ["wait", "tap", "fill", "launch", "confirm"]
+  },
+  "steps": [
+    { "action": "wait", "text": "Notes" },
+    { "action": "launch", "package": "com.example.mail" },
+    { "action": "wait", "text": "Inbox", "timeoutMs": 8000 }
+  ]
+}
+```
+
+## Backing up your workflows
+
+Android backup is disabled (`allowBackup="false"`), so **uninstalling Mobet erases the entire
+workflow library** — including the uninstall that a change of APK signing key forces. Use the
+overflow menu › **Export workflows…** to write a `.json` bundle you can share or store, and
+**Import workflows…** to restore it. Imports are validated before anything is written and
+never overwrite an existing name.
+
+Secret *values* are never exported. A workflow referencing `{{secret:name}}` exports only the
+reference, so a bundle cannot leak credentials; re-enter secrets on the new device.
+
+## Reminders, not unattended runs
+
+Mobet can remind you to start a saved workflow at a chosen time (library › **Remind me**), but
+it will not run one by itself. Unattended execution is intentionally unsupported: with nobody
+present, a confirmation prompt cannot be answered, a mis-grounded selector cannot be caught,
+and Stop cannot be pressed. The reminder posts a notification that opens Mobet with the
+workflow loaded — you still press **Run**.
+
 ## Safety and platform notes
 
 - Android displays a strong warning when enabling accessibility access because this capability can read and operate screen content. Only enable services you trust.

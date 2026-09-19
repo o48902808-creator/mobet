@@ -1,7 +1,9 @@
 package ai.arena.mobet
 
 import ai.arena.mobet.automation.MobetAccessibilityService
+import ai.arena.mobet.automation.RunReminder
 import ai.arena.mobet.automation.Workflow
+import ai.arena.mobet.automation.WorkflowTransfer
 import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.security.SecretStore
 import ai.arena.mobet.ui.MobetUi
@@ -25,6 +27,7 @@ import android.view.WindowManager
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.DrawableCompat
@@ -67,6 +70,17 @@ class MainActivity : AppCompatActivity() {
     /** Rolling in-memory log so the activity card shows history, not just the newest line. */
     private val activityLog = ArrayDeque<String>()
     private val logTime = SimpleDateFormat("HH:mm:ss", Locale.US)
+
+    /** Previous service state and tint, so changes can animate instead of snapping. */
+    private var lastServiceEnabled: Boolean? = null
+    private var currentServiceColor: Int? = null
+
+    /** System file picker used to import a workflow bundle. */
+    private val importPicker = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) result.data?.data?.let(::previewImport)
+    }
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -129,9 +143,13 @@ class MainActivity : AppCompatActivity() {
         status.text = getString(R.string.status_ready)
 
         findViewById<MaterialToolbar>(R.id.toolbar).setOnMenuItemClickListener { item ->
-            if (item.itemId == R.id.menu_help) {
-                showHelp(); true
-            } else false
+            when (item.itemId) {
+                R.id.menu_help -> { showHelp(); true }
+                R.id.menu_export -> { exportLibrary(); true }
+                R.id.menu_import -> { importLibrary(); true }
+                R.id.menu_reminders -> { showReminders(); true }
+                else -> false
+            }
         }
     }
 
@@ -164,6 +182,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.loadWorkflow).setOnClickListener { loadFromLibrary() }
         findViewById<View>(R.id.manageSecrets).setOnClickListener { manageSecrets() }
         findViewById<View>(R.id.recordTaps).setOnClickListener { startRecorder() }
+        findViewById<View>(R.id.chooseTarget).setOnClickListener { chooseTargetApp() }
+        findViewById<View>(R.id.editSteps).setOnClickListener { showStepBuilder() }
         findViewById<View>(R.id.generatePlan).setOnClickListener { showGoalPlanner() }
         findViewById<View>(R.id.runGoal).setOnClickListener { showAutonomousGoal() }
         findViewById<View>(R.id.dryRun).setOnClickListener { dryRunPlan() }
@@ -519,6 +539,7 @@ class MainActivity : AppCompatActivity() {
             showStatus("Autonomous run stopped from notification", Tone.WARNING)
             return
         }
+        openWorkflowFromReminder(value)
         handleConfirmation(value)
     }
 
@@ -813,6 +834,175 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    /** Opens the visual step editor over the same JSON the text editor holds. */
+    private fun showStepBuilder() {
+        ai.arena.mobet.ui.StepBuilder(
+            activity = this,
+            readSource = { editor.text.toString() },
+            writeSource = { editor.setText(it) },
+            notify = { message, tone -> showStatus(message, tone) }
+        ).show()
+    }
+
+    // ── Target app picker ────────────────────────────────────────────────────
+
+    /** Installed apps that expose a launcher activity, excluding Mobet itself. */
+    private fun launchableApps(): List<Pair<String, String>> =
+        packageManager.getInstalledApplications(0)
+            .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
+            .map { packageManager.getApplicationLabel(it).toString() to it.packageName }
+            .filter { it.second != packageName }
+            .sortedBy { it.first.lowercase() }
+
+    /**
+     * Rewrites the workflow's target package from a list of installed apps, so the user never
+     * has to know that Settings is `com.android.settings`.
+     *
+     * The old target is removed from `allowedPackages` and the new one added, keeping any extra
+     * packages the user authored for cross-app `launch` steps.
+     */
+    private fun chooseTargetApp() {
+        val apps = launchableApps()
+        if (apps.isEmpty()) {
+            showStatus("No launchable apps found", Tone.WARNING)
+            return
+        }
+        val current = runCatching { Workflow.parse(editor.text.toString()).packageName }.getOrNull()
+        MobetUi.picker(
+            activity = this,
+            title = "Choose target app",
+            subtitle = current?.let { "Currently: $it" } ?: "Sets \"package\" and the policy allowlist",
+            icon = R.drawable.ic_apps,
+            rows = apps.map { (label, pkg) ->
+                Row(label, pkg, R.drawable.ic_apps, badge = if (pkg == current) "current" else null)
+            }
+        ) { index -> applyTargetPackage(apps[index].second, apps[index].first) }
+    }
+
+    private fun applyTargetPackage(target: String, label: String) {
+        try {
+            val root = JSONObject(editor.text.toString())
+            val previous = root.optString("package").takeIf { it.isNotBlank() }
+            root.put("package", target)
+            val policy = root.optJSONObject("policy") ?: JSONObject().also { root.put("policy", it) }
+            val allowed = policy.optJSONArray("allowedPackages")
+            val packages = linkedSetOf<String>()
+            if (allowed != null) {
+                for (i in 0 until allowed.length()) packages.add(allowed.getString(i))
+            }
+            // Drop the package we are replacing, but preserve any additional launch targets.
+            if (previous != null) packages.remove(previous)
+            packages.add(target)
+            policy.put("allowedPackages", JSONArray(packages.toList()))
+            editor.setText(root.toString(2))
+            showStatus("Target set to $label ($target)", Tone.SUCCESS)
+        } catch (error: Exception) {
+            showStatus("Could not set target: ${error.message}", Tone.DANGER)
+        }
+    }
+
+    // ── Backup: export / import ──────────────────────────────────────────────
+
+    /**
+     * Offers the library as a shareable `.json` bundle.
+     *
+     * Because `allowBackup` is false, this is the only way a library survives an uninstall —
+     * which is exactly what a signing-key change forces. Secret values are never included.
+     */
+    private fun exportLibrary() {
+        val library = getSharedPreferences("library", MODE_PRIVATE)
+        val names = library.all.keys.sorted()
+        if (names.isEmpty()) {
+            showStatus("The workflow library is empty — nothing to export", Tone.WARNING)
+            return
+        }
+        val bundle = WorkflowTransfer.exportBundle(this)
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
+        MobetUi.ReportSheet(this)
+            .title("Export workflows", R.drawable.ic_save)
+            .subtitle("${names.size} workflow${if (names.size == 1) "" else "s"} · secrets are not included")
+            .paragraph(
+                "Android backup is disabled for Mobet, so uninstalling erases the library. Save " +
+                    "this bundle somewhere safe before reinstalling.\n\nSecret values stay in " +
+                    "encrypted storage and are never written to the file — a workflow that uses " +
+                    "{{secret:name}} exports only the reference."
+            )
+            .rows(names.map { Row(it, null, R.drawable.ic_library, showChevron = false) })
+            .action("Share bundle", primary = true) {
+                runCatching {
+                    val uri = WorkflowTransfer.writeShareable(this, bundle, "mobet-workflows-$stamp.json")
+                    startActivity(Intent.createChooser(
+                        WorkflowTransfer.shareIntent(uri, "Mobet workflow bundle"),
+                        "Export ${names.size} workflows"
+                    ))
+                }.onFailure { showStatus("Could not export: ${it.message}", Tone.DANGER) }
+            }
+            .action("Copy JSON") {
+                copyToClipboard("Mobet workflow bundle", bundle)
+                showStatus("Bundle copied to clipboard", Tone.SUCCESS)
+            }
+            .action(getString(R.string.action_close))
+            .show()
+    }
+
+    /** Launches the system file picker; the result is handled by [importPicker]. */
+    private fun importLibrary() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*")
+            .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain"))
+        runCatching { importPicker.launch(intent) }
+            .onFailure { showStatus("No file picker available on this device", Tone.DANGER) }
+    }
+
+    /**
+     * Previews a chosen bundle before writing anything.
+     *
+     * Every entry is validated by [Workflow.parse] first, and the user sees exactly what will
+     * be imported — including entries that failed — so a malformed or hostile file cannot
+     * quietly populate the library.
+     */
+    private fun previewImport(uri: android.net.Uri) {
+        val source = WorkflowTransfer.readUri(this, uri).getOrElse {
+            showStatus("Could not read file: ${it.message}", Tone.DANGER)
+            return
+        }
+        val result = WorkflowTransfer.parseBundle(source).getOrElse {
+            showStatus("Not a valid Mobet bundle: ${it.message}", Tone.DANGER)
+            return
+        }
+        val sheet = MobetUi.ReportSheet(this)
+            .title("Import workflows", R.drawable.ic_library)
+            .subtitle("${result.validCount} of ${result.workflows.size} ready to import")
+        if (result.validCount < result.workflows.size) {
+            sheet.banner("⚠ ${result.workflows.size - result.validCount} entr" +
+                "${if (result.workflows.size - result.validCount == 1) "y" else "ies"} " +
+                "failed validation and will be skipped", Tone.WARNING)
+        }
+        sheet.rows(result.workflows.map { entry ->
+            Row(
+                title = entry.name,
+                subtitle = entry.detail,
+                icon = if (entry.valid) R.drawable.ic_check else R.drawable.ic_warning,
+                badgeColor = ContextCompat.getColor(
+                    this, if (entry.valid) R.color.mobet_success else R.color.mobet_danger
+                ),
+                showChevron = false
+            )
+        })
+        sheet.paragraph(
+            "Imported workflows are added to the library; existing names are kept and the new " +
+                "copy is numbered. Review any workflow before running it."
+        )
+        if (result.validCount > 0) {
+            sheet.action("Import ${result.validCount}", primary = true) {
+                val written = WorkflowTransfer.commit(this, result.workflows)
+                showStatus("Imported $written workflow${if (written == 1) "" else "s"}", Tone.SUCCESS)
+            }
+        }
+        sheet.action(getString(R.string.action_cancel)).show()
+    }
+
     private fun loadFromLibrary() {
         val library = getSharedPreferences("library", MODE_PRIVATE)
         val names = library.all.keys.sorted()
@@ -835,23 +1025,118 @@ class MainActivity : AppCompatActivity() {
             emptyTitle = "The library is empty",
             emptyBody = "Save the workflow you are editing to keep it here."
         ) { index ->
-            library.getString(names[index], null)?.let(editor::setText)
-            showStatus("Loaded “${names[index]}”", Tone.SUCCESS)
+            val name = names[index]
+            MobetUi.ReportSheet(this)
+                .title(name, R.drawable.ic_library)
+                .subtitle(rows[index].subtitle)
+                .action("Load", primary = true) {
+                    library.getString(name, null)?.let(editor::setText)
+                    showStatus("Loaded “$name”", Tone.SUCCESS)
+                }
+                .action("Remind me") { scheduleReminder(name) }
+                .action(getString(R.string.action_delete), destructive = true) {
+                    confirmDestructive(
+                        "Delete “$name”?",
+                        "The saved workflow is removed from the library. Export first if you " +
+                            "want to keep a copy.",
+                        getString(R.string.action_delete)
+                    ) {
+                        library.edit().remove(name).apply()
+                        RunReminder.cancel(this, name)
+                        showStatus("Deleted “$name”", Tone.SUCCESS)
+                    }
+                }
+                .show()
         }
+    }
+
+    // ── Run reminders ────────────────────────────────────────────────────────
+
+    /**
+     * Schedules a reminder for a saved workflow.
+     *
+     * This intentionally does not auto-run anything. Mobet's safety model depends on a human
+     * being present to answer confirmations and hit Stop, so the alarm posts a notification
+     * that opens the app with the workflow loaded — the user still presses Run.
+     */
+    private fun scheduleReminder(name: String) {
+        val now = java.util.Calendar.getInstance()
+        android.app.TimePickerDialog(
+            this,
+            { _, hour, minute ->
+                val target = java.util.Calendar.getInstance().apply {
+                    set(java.util.Calendar.HOUR_OF_DAY, hour)
+                    set(java.util.Calendar.MINUTE, minute)
+                    set(java.util.Calendar.SECOND, 0)
+                    set(java.util.Calendar.MILLISECOND, 0)
+                    // A time already past today means the user meant tomorrow.
+                    if (timeInMillis <= System.currentTimeMillis()) {
+                        add(java.util.Calendar.DAY_OF_YEAR, 1)
+                    }
+                }
+                if (RunReminder.schedule(this, name, target.timeInMillis)) {
+                    showStatus(
+                        "Reminder set for ${RunReminder.format(target.timeInMillis)} — " +
+                            "Mobet will prompt you, not run it",
+                        Tone.SUCCESS
+                    )
+                } else {
+                    showStatus("Could not set the reminder", Tone.DANGER)
+                }
+            },
+            now.get(java.util.Calendar.HOUR_OF_DAY),
+            now.get(java.util.Calendar.MINUTE),
+            true
+        ).show()
+    }
+
+    private fun showReminders() {
+        val pending = RunReminder.pending(this)
+        val sheet = MobetUi.ReportSheet(this)
+            .title("Run reminders", R.drawable.ic_diagnostics)
+            .subtitle("Mobet reminds you — it never runs a workflow on its own")
+        if (pending.isEmpty()) {
+            sheet.empty(
+                "No reminders scheduled",
+                "Open the workflow library and choose Remind me to schedule one.",
+                R.drawable.ic_diagnostics
+            )
+        } else {
+            sheet.rows(pending.map { (name, at) ->
+                Row(name, RunReminder.format(at), R.drawable.ic_run, showChevron = false)
+            })
+            sheet.action("Cancel all", destructive = true) {
+                pending.forEach { RunReminder.cancel(this, it.first) }
+                showStatus("All reminders cancelled", Tone.SUCCESS)
+            }
+        }
+        sheet.paragraph(
+            "Unattended execution is intentionally unsupported: a workflow running with nobody " +
+                "present could not be confirmed, supervised, or stopped. Reminders keep you in " +
+                "the loop while still nudging you at the right time."
+        )
+        sheet.action(getString(R.string.action_close)).show()
+    }
+
+    /** Opens a workflow from the library when launched via a reminder notification. */
+    private fun openWorkflowFromReminder(intent: Intent?) {
+        if (intent?.action != ACTION_OPEN_WORKFLOW) return
+        this.intent.action = null
+        val name = intent.getStringExtra(RunReminder.EXTRA_WORKFLOW_NAME) ?: return
+        val source = getSharedPreferences("library", MODE_PRIVATE).getString(name, null)
+        if (source == null) {
+            showStatus("Workflow “$name” is no longer in the library", Tone.WARNING)
+            return
+        }
+        editor.setText(source)
+        showStatus("Loaded “$name” from a reminder — review it, then press Run", Tone.SUCCESS)
     }
 
     // ── Recording ────────────────────────────────────────────────────────────
 
     private fun startRecorder() {
         val service = MobetAccessibilityService.instance ?: run { requireService(); return }
-        val apps = packageManager.getInstalledApplications(0)
-            .mapNotNull { app ->
-                packageManager.getLaunchIntentForPackage(app.packageName)?.let {
-                    Triple(packageManager.getApplicationLabel(app).toString(), app.packageName, it)
-                }
-            }
-            .filter { it.second != packageName }
-            .sortedBy { it.first.lowercase() }
+        val apps = launchableApps()
         if (apps.isEmpty()) {
             showStatus("No launchable apps found", Tone.WARNING)
             return
@@ -863,12 +1148,12 @@ class MainActivity : AppCompatActivity() {
             icon = R.drawable.ic_record,
             rows = apps.map { Row(it.first, it.second, R.drawable.ic_record) }
         ) { index ->
-            val target = apps[index]
+            val (label, target) = apps[index]
             service.startRecording()
-            if (!service.launchTarget(target.second)) {
-                showStatus("Could not launch ${target.first}", Tone.DANGER)
+            if (!service.launchTarget(target)) {
+                showStatus("Could not launch $label", Tone.DANGER)
             } else {
-                showStatus("Recording in ${target.first} — return and tap Stop to import", Tone.SUCCESS)
+                showStatus("Recording in $label — return and tap Stop to import", Tone.SUCCESS)
             }
         }
     }
@@ -940,9 +1225,17 @@ class MainActivity : AppCompatActivity() {
             this,
             if (enabled) R.color.mobet_success else R.color.mobet_danger
         )
-        serviceDot.background?.mutate()?.let { DrawableCompat.setTint(it, color) }
-        serviceState.setTextColor(color)
+        // Motion here is informational, not decorative: enabling the service is the one state
+        // change that unblocks the whole app, so it animates rather than snapping.
+        animateServiceColor(color)
         serviceCard.strokeColor = (color and 0x00FFFFFF) or 0x55000000
+        if (enabled != lastServiceEnabled && lastServiceEnabled != null) {
+            serviceDot.animate().scaleX(1.6f).scaleY(1.6f).setDuration(160)
+                .withEndAction {
+                    serviceDot.animate().scaleX(1f).scaleY(1f).setDuration(220).start()
+                }.start()
+        }
+        lastServiceEnabled = enabled
         // Both the shortcut and the restricted-settings explainer are only useful while the
         // service is still off.
         val setupVisibility = if (enabled) View.GONE else View.VISIBLE
@@ -958,8 +1251,38 @@ class MainActivity : AppCompatActivity() {
         )?.split(':')?.any { it.equals(expected, ignoreCase = true) } == true
     }
 
+    /** Cross-fades the service indicator between its previous and new tint. */
+    private fun animateServiceColor(target: Int) {
+        val from = currentServiceColor
+        currentServiceColor = target
+        if (from == null) {
+            applyServiceColor(target)
+            return
+        }
+        if (from == target) return
+        android.animation.ValueAnimator.ofObject(android.animation.ArgbEvaluator(), from, target)
+            .apply {
+                duration = 320
+                addUpdateListener { applyServiceColor(it.animatedValue as Int) }
+                start()
+            }
+    }
+
+    private fun applyServiceColor(color: Int) {
+        serviceDot.background?.mutate()?.let { DrawableCompat.setTint(it, color) }
+        serviceState.setTextColor(color)
+    }
+
     private fun showBusy(busy: Boolean) {
-        runProgress.visibility = if (busy) View.VISIBLE else View.GONE
+        if (busy == (runProgress.visibility == View.VISIBLE)) return
+        if (busy) {
+            runProgress.alpha = 0f
+            runProgress.visibility = View.VISIBLE
+            runProgress.animate().alpha(1f).setDuration(180).start()
+        } else {
+            runProgress.animate().alpha(0f).setDuration(180)
+                .withEndAction { runProgress.visibility = View.GONE }.start()
+        }
     }
 
     /**
@@ -1059,6 +1382,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         const val ACTION_STOP_AUTONOMY = "ai.arena.mobet.STOP_AUTONOMY"
+        const val ACTION_OPEN_WORKFLOW = "ai.arena.mobet.OPEN_WORKFLOW"
 
         /** Runner phrases that mean no operation is in flight any more. */
         private val TERMINAL_MARKERS = listOf(

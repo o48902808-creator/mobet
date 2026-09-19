@@ -25,6 +25,12 @@
     <string name="action_load">Load</string>
     <string name="action_secrets">Secrets</string>
     <string name="action_record">Record</string>
+    <string name="action_record_taps">Record taps and scrolls in an app</string>
+    <string name="action_choose_target">Choose target app…</string>
+    <string name="action_edit_steps">Edit steps visually</string>
+    <string name="step_move_up">Move step up</string>
+    <string name="step_move_down">Move step down</string>
+    <string name="step_delete">Delete step</string>
 
     <!-- Planning card -->
     <string name="section_planning">Plan &amp; autonomy</string>
@@ -55,6 +61,10 @@
     <string name="safety_notice">Only automate apps and accounts you are authorized to use. Review every workflow before you run it.</string>
 
     <!-- Dialogs -->
+    <string name="action_export">Export workflows…</string>
+    <string name="action_import">Import workflows…</string>
+    <string name="action_reminders">Run reminders…</string>
+    <string name="action_help">How Mobet works</string>
     <string name="action_close">Close</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_clear">Clear</string>
