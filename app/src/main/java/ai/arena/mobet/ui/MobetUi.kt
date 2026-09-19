@@ -37,6 +37,9 @@ object MobetUi {
 
     enum class Tone { NEUTRAL, SUCCESS, WARNING, DANGER }
 
+    /** Lists at or above this length get a search field. */
+    private const val SEARCH_THRESHOLD = 12
+
     // ── Units ────────────────────────────────────────────────────────────────
 
     fun Context.dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
@@ -212,8 +215,22 @@ object MobetUi {
         @DrawableRes val icon: Int? = null,
         val badge: CharSequence? = null,
         @ColorInt val badgeColor: Int? = null,
-        val showChevron: Boolean = true
-    )
+        val showChevron: Boolean = true,
+        /** Real drawable (e.g. an app's launcher icon), preferred over [icon] when present. */
+        val iconDrawable: android.graphics.drawable.Drawable? = null,
+        /** Lowercased haystack used by the picker's search box; defaults to title + subtitle. */
+        val searchKey: String = "",
+        /** Set when the row should not tint its drawable with the primary colour. */
+        val preserveIconColor: Boolean = false
+    ) {
+        fun matches(query: String): Boolean {
+            if (query.isBlank()) return true
+            val haystack = searchKey.ifBlank {
+                (title.toString() + " " + (subtitle ?: "")).lowercase()
+            }
+            return haystack.contains(query.lowercase())
+        }
+    }
 
     private fun buildRow(context: Context, row: Row, onClick: () -> Unit): View {
         val view = LayoutInflater.from(context).inflate(R.layout.item_picker_row, null, false)
@@ -223,7 +240,22 @@ object MobetUi {
             visibility = if (row.subtitle.isNullOrBlank()) View.GONE else View.VISIBLE
         }
         view.findViewById<ImageView>(R.id.rowIcon).apply {
-            if (row.icon == null) visibility = View.GONE else setImageResource(row.icon)
+            when {
+                row.iconDrawable != null -> {
+                    setImageDrawable(row.iconDrawable)
+                    // App launcher icons carry their own brand colour; tinting would destroy it.
+                    imageTintList = null
+                    layoutParams = layoutParams.apply {
+                        width = context.dp(28)
+                        height = context.dp(28)
+                    }
+                }
+                row.icon != null -> {
+                    setImageResource(row.icon)
+                    if (row.preserveIconColor) imageTintList = null
+                }
+                else -> visibility = View.GONE
+            }
         }
         view.findViewById<TextView>(R.id.rowBadge).apply {
             if (row.badge.isNullOrBlank()) {
@@ -248,7 +280,14 @@ object MobetUi {
 
     // ── Pickers ──────────────────────────────────────────────────────────────
 
-    /** Icon-and-subtitle list that replaces `AlertDialog.setItems`. */
+    /**
+     * Icon-and-subtitle list that replaces `AlertDialog.setItems`.
+     *
+     * Lists longer than [SEARCH_THRESHOLD] gain a filter box — the installed-app picker can run
+     * to several hundred entries, where scrolling alone is unusable. The selection callback
+     * always receives the index into the *original* list, so filtering cannot cause the caller
+     * to act on the wrong item.
+     */
     fun picker(
         activity: Activity,
         title: CharSequence,
@@ -259,10 +298,68 @@ object MobetUi {
         emptyBody: CharSequence = "",
         onSelect: (Int) -> Unit
     ) {
-        val sheet = ReportSheet(activity).title(title, icon).subtitle(subtitle)
-        if (rows.isEmpty()) sheet.empty(emptyTitle, emptyBody) else sheet.rows(rows, onSelect)
-        sheet.show()
+        if (rows.isEmpty()) {
+            ReportSheet(activity).title(title, icon).subtitle(subtitle)
+                .empty(emptyTitle, emptyBody).show()
+            return
+        }
+
+        val dialog = BottomSheetDialog(activity)
+        val view = LayoutInflater.from(activity).inflate(R.layout.sheet_picker, null, false)
+        dialog.setContentView(view)
+        dialog.behavior.apply {
+            state = BottomSheetBehavior.STATE_EXPANDED
+            skipCollapsed = true
+        }
+
+        view.findViewById<TextView>(R.id.pickerTitle).text = title
+        view.findViewById<TextView>(R.id.pickerSubtitle).apply {
+            text = subtitle
+            visibility = if (subtitle.isNullOrBlank()) View.GONE else View.VISIBLE
+        }
+        view.findViewById<ImageView>(R.id.pickerIcon).apply {
+            if (icon == null) visibility = View.GONE else setImageResource(icon)
+        }
+
+        val list: LinearLayout = view.findViewById(R.id.pickerList)
+        val noMatches: TextView = view.findViewById(R.id.pickerNoMatches)
+
+        fun render(query: String) {
+            list.removeAllViews()
+            var shown = 0
+            rows.forEachIndexed { index, row ->
+                if (!row.matches(query)) return@forEachIndexed
+                shown++
+                list.addView(buildRow(activity, row) {
+                    dialog.dismiss()
+                    onSelect(index)
+                })
+            }
+            noMatches.visibility = if (shown == 0) View.VISIBLE else View.GONE
+        }
+        render("")
+
+        if (rows.size >= SEARCH_THRESHOLD) {
+            view.findViewById<View>(R.id.pickerSearchLayout).visibility = View.VISIBLE
+            view.findViewById<TextInputEditText>(R.id.pickerSearch)
+                .addTextChangedListener(object : android.text.TextWatcher {
+                    override fun afterTextChanged(s: android.text.Editable?) =
+                        render(s?.toString().orEmpty())
+                    override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+                    override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+                })
+        }
+
+        val actions: LinearLayout = view.findViewById(R.id.pickerActions)
+        val close = LayoutInflater.from(activity)
+            .inflate(R.layout.widget_sheet_action_text, actions, false) as MaterialButton
+        close.text = activity.getString(R.string.action_close)
+        close.setOnClickListener { dialog.dismiss() }
+        actions.addView(close)
+
+        dialog.show()
     }
+
 
     // ── Forms ────────────────────────────────────────────────────────────────
 

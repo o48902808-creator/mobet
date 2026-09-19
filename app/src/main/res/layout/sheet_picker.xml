@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?attr/colorSurface"
+    android:orientation="vertical"
+    android:paddingBottom="@dimen/mobet_gap">
+
+    <View
+        android:layout_width="36dp"
+        android:layout_height="4dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="10dp"
+        android:background="@drawable/bg_sheet_handle" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/mobet_gap_large"
+        android:paddingTop="@dimen/mobet_gap"
+        android:paddingEnd="@dimen/mobet_gap_large">
+
+        <ImageView
+            android:id="@+id/pickerIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginEnd="12dp"
+            android:contentDescription="@null"
+            app:tint="?attr/colorPrimary"
+            tools:src="@drawable/ic_apps" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/pickerTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textAppearance="@style/TextAppearance.Material3.TitleLarge"
+                tools:text="Choose target app" />
+
+            <TextView
+                android:id="@+id/pickerSubtitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textAppearance="@style/TextAppearance.Mobet.Body"
+                android:visibility="gone"
+                tools:text="128 apps"
+                tools:visibility="visible" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Appears only when the list is long enough to be worth filtering. -->
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/pickerSearchLayout"
+        style="@style/Widget.Mobet.TextInputLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="@dimen/mobet_gap_large"
+        android:layout_marginTop="@dimen/mobet_gap"
+        android:layout_marginEnd="@dimen/mobet_gap_large"
+        android:hint="@string/picker_search_hint"
+        android:visibility="gone"
+        app:startIconDrawable="@drawable/ic_inspect"
+        tools:visibility="visible">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/pickerSearch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:imeOptions="actionSearch"
+            android:importantForAutofill="no"
+            android:inputType="text"
+            android:maxLines="1" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <ai.arena.mobet.ui.MaxHeightScrollView
+        android:id="@+id/pickerScroll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/mobet_gap_small"
+        android:paddingStart="@dimen/mobet_gap_large"
+        android:paddingEnd="@dimen/mobet_gap_large"
+        android:scrollbars="vertical">
+
+        <LinearLayout
+            android:id="@+id/pickerList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ai.arena.mobet.ui.MaxHeightScrollView>
+
+    <TextView
+        android:id="@+id/pickerNoMatches"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingTop="26dp"
+        android:paddingBottom="26dp"
+        android:text="@string/picker_no_matches"
+        android:textAppearance="@style/TextAppearance.Mobet.Body"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/pickerActions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/mobet_gap_small"
+        android:gravity="end"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/mobet_gap_large"
+        android:paddingEnd="@dimen/mobet_gap_large" />
+</LinearLayout>

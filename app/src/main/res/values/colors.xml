@@ -32,4 +32,10 @@
     <color name="mobet_scrim">#66000000</color>
     <color name="mobet_danger_container">#FFDAD6</color>
     <color name="mobet_warning_container">#FFF0D2</color>
+    <!-- JSON editor syntax colours (light). -->
+    <color name="mobet_json_key">#1F4FD8</color>
+    <color name="mobet_json_string">#0B7A5A</color>
+    <color name="mobet_json_number">#9A4B00</color>
+    <color name="mobet_json_literal">#8A2BBE</color>
+    <color name="mobet_json_punctuation">#6B6B7B</color>
 </resources>

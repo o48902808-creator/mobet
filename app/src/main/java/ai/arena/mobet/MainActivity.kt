@@ -6,6 +6,7 @@ import ai.arena.mobet.automation.Workflow
 import ai.arena.mobet.automation.WorkflowTransfer
 import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.security.SecretStore
+import ai.arena.mobet.ui.JsonHighlighter
 import ai.arena.mobet.ui.MobetUi
 import ai.arena.mobet.ui.MobetUi.Row
 import ai.arena.mobet.ui.MobetUi.Tone
@@ -70,6 +71,9 @@ class MainActivity : AppCompatActivity() {
     /** Rolling in-memory log so the activity card shows history, not just the newest line. */
     private val activityLog = ArrayDeque<String>()
     private val logTime = SimpleDateFormat("HH:mm:ss", Locale.US)
+
+    private lateinit var highlighter: JsonHighlighter
+    private var highlighting = false
 
     /** Previous service state and tint, so changes can animate instead of snapping. */
     private var lastServiceEnabled: Boolean? = null
@@ -193,11 +197,33 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.showAudit).setOnClickListener { showAuditLedger() }
         findViewById<View>(R.id.showMemory).setOnClickListener { showAgentMemory() }
         findViewById<View>(R.id.validatePolicy).setOnClickListener { validatePlan() }
-        findViewById<View>(R.id.runWorkflow).setOnClickListener { runWorkflow() }
-        findViewById<View>(R.id.stopRun).setOnClickListener { stopAndImport() }
+        // The two controls with real-world consequences get tactile confirmation.
+        findViewById<View>(R.id.runWorkflow).setOnClickListener {
+            it.haptic(confirming = true)
+            runWorkflow()
+        }
+        findViewById<View>(R.id.stopRun).setOnClickListener {
+            it.haptic(confirming = false)
+            stopAndImport()
+        }
 
+        highlighter = JsonHighlighter(
+            keyColor = ContextCompat.getColor(this, R.color.mobet_json_key),
+            stringColor = ContextCompat.getColor(this, R.color.mobet_json_string),
+            numberColor = ContextCompat.getColor(this, R.color.mobet_json_number),
+            literalColor = ContextCompat.getColor(this, R.color.mobet_json_literal),
+            punctuationColor = ContextCompat.getColor(this, R.color.mobet_json_punctuation)
+        )
         editor.addTextChangedListener(object : android.text.TextWatcher {
-            override fun afterTextChanged(s: android.text.Editable?) = refreshWorkflowSummary()
+            override fun afterTextChanged(s: android.text.Editable?) {
+                // Applying spans mutates the Editable, which re-enters this callback; the flag
+                // keeps that from recursing.
+                if (highlighting) return
+                highlighting = true
+                s?.let { highlighter.apply(it) }
+                highlighting = false
+                refreshWorkflowSummary()
+            }
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
         })
@@ -638,7 +664,8 @@ class MainActivity : AppCompatActivity() {
                 val name = names[index - 1]
                 confirmDestructive(
                     "Delete secret?",
-                    "“$name” will be permanently removed from encrypted storage.",
+                    "“$name” will be permanently removed from encrypted storage. This cannot be " +
+                        "undone — Mobet cannot read a stored secret back to restore it.",
                     getString(R.string.action_delete)
                 ) {
                     store.delete(name)
@@ -840,19 +867,55 @@ class MainActivity : AppCompatActivity() {
             activity = this,
             readSource = { editor.text.toString() },
             writeSource = { editor.setText(it) },
-            notify = { message, tone -> showStatus(message, tone) }
+            notify = { message, tone -> showStatus(message, tone) },
+            undo = { message, restore -> reportUndoable(message, restore) },
+            appPicker = { onChosen ->
+                val apps = launchableApps()
+                if (apps.isEmpty()) showStatus("No launchable apps found", Tone.WARNING)
+                else MobetUi.picker(
+                    activity = this,
+                    title = "Choose app to launch",
+                    subtitle = "Remember to add it to policy.allowedPackages",
+                    icon = R.drawable.ic_apps,
+                    rows = apps.map { appRow(it) }
+                ) { index -> onChosen(apps[index].packageName) }
+            }
         ).show()
     }
 
     // ── Target app picker ────────────────────────────────────────────────────
 
+    /** An installed, launchable app with its real launcher icon. */
+    data class InstalledApp(
+        val label: String,
+        val packageName: String,
+        val icon: android.graphics.drawable.Drawable?
+    )
+
     /** Installed apps that expose a launcher activity, excluding Mobet itself. */
-    private fun launchableApps(): List<Pair<String, String>> =
+    private fun launchableApps(): List<InstalledApp> =
         packageManager.getInstalledApplications(0)
             .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
-            .map { packageManager.getApplicationLabel(it).toString() to it.packageName }
-            .filter { it.second != packageName }
-            .sortedBy { it.first.lowercase() }
+            .filter { it.packageName != packageName }
+            .map { info ->
+                InstalledApp(
+                    label = packageManager.getApplicationLabel(info).toString(),
+                    packageName = info.packageName,
+                    // Loading icons is cheap enough for a one-shot picker and makes the list
+                    // scannable at a glance instead of a wall of identical glyphs.
+                    icon = runCatching { packageManager.getApplicationIcon(info) }.getOrNull()
+                )
+            }
+            .sortedBy { it.label.lowercase() }
+
+    private fun appRow(app: InstalledApp, badge: String? = null) = Row(
+        title = app.label,
+        subtitle = app.packageName,
+        icon = R.drawable.ic_apps,
+        iconDrawable = app.icon,
+        badge = badge,
+        searchKey = "${app.label} ${app.packageName}".lowercase()
+    )
 
     /**
      * Rewrites the workflow's target package from a list of installed apps, so the user never
@@ -873,10 +936,8 @@ class MainActivity : AppCompatActivity() {
             title = "Choose target app",
             subtitle = current?.let { "Currently: $it" } ?: "Sets \"package\" and the policy allowlist",
             icon = R.drawable.ic_apps,
-            rows = apps.map { (label, pkg) ->
-                Row(label, pkg, R.drawable.ic_apps, badge = if (pkg == current) "current" else null)
-            }
-        ) { index -> applyTargetPackage(apps[index].second, apps[index].first) }
+            rows = apps.map { appRow(it, badge = if (it.packageName == current) "current" else null) }
+        ) { index -> applyTargetPackage(apps[index].packageName, apps[index].label) }
     }
 
     private fun applyTargetPackage(target: String, label: String) {
@@ -1041,9 +1102,13 @@ class MainActivity : AppCompatActivity() {
                             "want to keep a copy.",
                         getString(R.string.action_delete)
                     ) {
+                        val backup = library.getString(name, null)
                         library.edit().remove(name).apply()
                         RunReminder.cancel(this, name)
-                        showStatus("Deleted “$name”", Tone.SUCCESS)
+                        if (backup == null) showStatus("Deleted “$name”", Tone.SUCCESS)
+                        else reportUndoable("Deleted “$name”") {
+                            library.edit().putString(name, backup).apply()
+                        }
                     }
                 }
                 .show()
@@ -1146,14 +1211,14 @@ class MainActivity : AppCompatActivity() {
             title = "Record taps in app",
             subtitle = "Mobet captures the selectors you touch, then you import them as steps",
             icon = R.drawable.ic_record,
-            rows = apps.map { Row(it.first, it.second, R.drawable.ic_record) }
+            rows = apps.map { appRow(it) }
         ) { index ->
-            val (label, target) = apps[index]
+            val app = apps[index]
             service.startRecording()
-            if (!service.launchTarget(target)) {
-                showStatus("Could not launch $label", Tone.DANGER)
+            if (!service.launchTarget(app.packageName)) {
+                showStatus("Could not launch ${app.label}", Tone.DANGER)
             } else {
-                showStatus("Recording in $label — return and tap Stop to import", Tone.SUCCESS)
+                showStatus("Recording in ${app.label} — return and tap Stop to import", Tone.SUCCESS)
             }
         }
     }
@@ -1296,6 +1361,21 @@ class MainActivity : AppCompatActivity() {
         if (TERMINAL_MARKERS.any { message.contains(it, ignoreCase = true) }) showBusy(false)
     }
 
+    /**
+     * Reports a reversible destructive action and offers a single-tap Undo.
+     *
+     * Deleting a saved workflow or a step used to be unrecoverable — with `allowBackup="false"`
+     * and no version history, a mis-tap meant retyping it. The caller supplies a restore
+     * closure; the snackbar keeps it alive for the duration of the bar.
+     */
+    private fun reportUndoable(message: String, undo: () -> Unit) {
+        appendLog(message)
+        MobetUi.snack(this, message, Tone.SUCCESS, getString(R.string.action_undo)) {
+            undo()
+            showStatus("Restored", Tone.SUCCESS)
+        }
+    }
+
     private fun appendLog(message: String) {
         activityLog.addLast("${logTime.format(Date())}  $message")
         while (activityLog.size > 80) activityLog.removeFirst()
@@ -1304,6 +1384,23 @@ class MainActivity : AppCompatActivity() {
             val overflow = status.layout?.let { it.getLineTop(it.lineCount) - status.height } ?: 0
             if (overflow > 0) status.scrollTo(0, overflow)
         }
+    }
+
+    /**
+     * Tactile feedback for consequential controls.
+     *
+     * CONFIRM/REJECT only exist from API 30; below that we fall back to the long-standing
+     * KEYBOARD_TAP so older devices still get a cue rather than silence.
+     */
+    private fun View.haptic(confirming: Boolean) {
+        val effect = when {
+            Build.VERSION.SDK_INT >= 30 && confirming ->
+                android.view.HapticFeedbackConstants.CONFIRM
+            Build.VERSION.SDK_INT >= 30 ->
+                android.view.HapticFeedbackConstants.REJECT
+            else -> android.view.HapticFeedbackConstants.KEYBOARD_TAP
+        }
+        runCatching { performHapticFeedback(effect) }
     }
 
     private fun copyToClipboard(label: String, value: String) {

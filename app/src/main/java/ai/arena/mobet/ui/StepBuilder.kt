@@ -30,7 +30,11 @@ class StepBuilder(
     private val activity: Activity,
     private val readSource: () -> String,
     private val writeSource: (String) -> Unit,
-    private val notify: (String, MobetUi.Tone) -> Unit
+    private val notify: (String, MobetUi.Tone) -> Unit,
+    /** Reports a reversible change and surfaces an Undo affordance. */
+    private val undo: (String, () -> Unit) -> Unit,
+    /** Supplies installed apps so a `launch` step can be picked rather than typed. */
+    private val appPicker: ((String) -> Unit) -> Unit
 ) {
 
     /** Actions the visual builder can create, with the fields each one needs. */
@@ -144,8 +148,15 @@ class StepBuilder(
             setOnClickListener { swap(steps, index, index + 1, root, sheet) }
         }
         view.findViewById<MaterialButton>(R.id.stepDelete).setOnClickListener {
+            // Keep a copy so the removal can be reversed from the snackbar.
+            val removed = steps.getJSONObject(index)
             steps.remove(index)
-            commit(root, sheet, "Step ${index + 1} removed")
+            writeSource(root.toString(2))
+            sheet.dismiss()
+            undo("Step ${index + 1} removed") {
+                reinsert(root, index, removed)
+            }
+            show()
         }
         view.setOnClickListener { editStep(root, steps, index, sheet) }
         return view
@@ -176,6 +187,24 @@ class StepBuilder(
         steps.put(from, b)
         steps.put(to, a)
         commit(root, sheet, "Step order updated")
+    }
+
+    /** Re-inserts a removed step at its original position and reopens the builder. */
+    private fun reinsert(root: JSONObject, index: Int, item: JSONObject) {
+        val steps = root.optJSONArray("steps") ?: JSONArray().also { root.put("steps", it) }
+        val rebuilt = JSONArray()
+        var inserted = false
+        for (i in 0 until steps.length()) {
+            if (i == index) {
+                rebuilt.put(item)
+                inserted = true
+            }
+            rebuilt.put(steps.get(i))
+        }
+        if (!inserted) rebuilt.put(item)
+        root.put("steps", rebuilt)
+        writeSource(root.toString(2))
+        show()
     }
 
     /** Writes the mutated JSON back to the editor and reopens the builder in its new state. */
@@ -238,6 +267,13 @@ class StepBuilder(
             activity, "Package name", "Must also be in policy.allowedPackages"
         ).also { field ->
             existing?.optString("package")?.takeIf(String::isNotBlank)?.let(field.input::setText)
+            // Typing a package name from memory is error-prone; offer the installed-app list.
+            field.layout.endIconMode = com.google.android.material.textfield.TextInputLayout.END_ICON_CUSTOM
+            field.layout.setEndIconDrawable(R.drawable.ic_apps)
+            field.layout.setEndIconContentDescription(R.string.action_choose_target)
+            field.layout.setEndIconOnClickListener {
+                appPicker { chosen -> field.input.setText(chosen) }
+            }
             fields.add(field.layout)
         } else null
 
