@@ -20,7 +20,8 @@
 ## Enforced invariants
 
 - Screen and model text are untrusted data, never policy instructions.
-- The absence of network permissions is enforced, not assumed: `ManifestPostureTest` asserts the source manifest and the Gradle task `verify<Variant>NoNetworkPermission` asserts the **merged** manifest, so a transitive dependency cannot contribute `INTERNET` through manifest merging. `assemble` and `check` both depend on it.
+- The absence of network permissions is enforced, not assumed: `ManifestPostureTest` asserts the source manifest and the Gradle task `verify<Variant>NoNetworkPermission` asserts the **merged** manifest, so a transitive dependency cannot contribute `INTERNET` through manifest merging. `assemble*` depends on it and CI runs it explicitly.
+- ML Kit's bundled OCR pulls in `com.google.android.datatransport`, which declares `INTERNET` and `ACCESS_NETWORK_STATE` for telemetry. These are stripped with `tools:node="remove"`; on-device OCR requires neither. This was found by the merged-manifest check on its first run, having previously shipped unnoticed.
 - Injection detection is a *signal, not a boundary*. `ContentTrustEngine` is a heuristic that will eventually be evaded; containment does not depend on it. `InjectionDefenceInDepthTest` proves the risk ceiling, irreversibility rule, cycle budget, and model-ranking allowlist all hold with the detector deliberately bypassed.
 - A proposed action is canonicalized against a fresh accessibility snapshot immediately before use.
 - Live package provenance is checked before action execution and before success evidence.
@@ -40,7 +41,7 @@
 
 ## Privacy posture
 
-The manifest contains no internet permission. Agent memory excludes visible labels, OCR text, entered values, secrets, and screenshots; it stores package names, app versions, structural screen/action hashes, outcomes, confidence, timestamps, failure classes, and repair hashes. Consented screenshots stay in private app storage. Mobet's own activity uses `FLAG_SECURE` and Android backup is disabled.
+The merged manifest contains no internet permission — verified at build time rather than asserted, including the removal of the permissions ML Kit's telemetry dependency contributes. Agent memory excludes visible labels, OCR text, entered values, secrets, and screenshots; it stores package names, app versions, structural screen/action hashes, outcomes, confidence, timestamps, failure classes, and repair hashes. Consented screenshots stay in private app storage. Mobet's own activity uses `FLAG_SECURE` and Android backup is disabled.
 
 ## If network access is ever added
 

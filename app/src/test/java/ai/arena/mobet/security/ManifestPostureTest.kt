@@ -42,9 +42,24 @@ class ManifestPostureTest {
         "android.permission.BLUETOOTH_SCAN"
     )
 
+    /**
+     * Every `<uses-permission>` entry, paired with whether it is a declaration or a
+     * `tools:node="remove"` directive stripping a dependency-contributed permission.
+     */
+    private fun permissionEntries(): List<Pair<String, Boolean>> =
+        Regex("""<uses-permission\b([^>]*)/>""", RegexOption.DOT_MATCHES_ALL)
+            .findAll(manifest)
+            .mapNotNull { match ->
+                val attrs = match.groupValues[1]
+                val name = Regex("""android:name="([^"]+)"""").find(attrs)?.groupValues?.get(1)
+                name?.to(attrs.contains("""tools:node="remove""""))
+            }
+            .toList()
+
     @Test
     fun declaresNoNetworkPermission() {
-        val found = forbidden.filter { manifest.contains("\"$it\"") }
+        val declared = permissionEntries().filter { !it.second }.map { it.first }
+        val found = forbidden.filter(declared::contains)
         assertEquals(
             "Mobet must not declare network permissions: an accessibility service that can " +
                 "read every screen plus network access is an exfiltration channel. If this is " +
@@ -58,14 +73,30 @@ class ManifestPostureTest {
     @Test
     fun declaresOnlyTheNotificationPermission() {
         // Catches a *new* permission of any kind, including ones not yet on the forbidden list.
-        val declared = Regex("""<uses-permission\s+android:name="([^"]+)"""")
-            .findAll(manifest).map { it.groupValues[1] }.toList()
+        val declared = permissionEntries().filter { !it.second }.map { it.first }
         assertEquals(
             "Mobet's permission set changed. Every permission is a capability an accessibility " +
                 "service can abuse; justify it in the threat model before adding it here.",
             listOf("android.permission.POST_NOTIFICATIONS"),
             declared
         )
+    }
+
+    @Test
+    fun stripsTheNetworkPermissionsMlKitContributes() {
+        // ML Kit's datatransport dependency declares INTERNET and ACCESS_NETWORK_STATE for
+        // telemetry. On-device OCR needs neither, so they are removed at merge time. Without
+        // these directives the shipped APK holds network access while the docs claim otherwise.
+        val removed = permissionEntries().filter { it.second }.map { it.first }
+        listOf(
+            "android.permission.INTERNET",
+            "android.permission.ACCESS_NETWORK_STATE"
+        ).forEach {
+            assertTrue(
+                "$it must be stripped with tools:node=\"remove\"; a dependency contributes it.",
+                removed.contains(it)
+            )
+        }
     }
 
     @Test
