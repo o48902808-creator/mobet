@@ -32,7 +32,31 @@ jobs:
 
       # The repository intentionally omits the Gradle wrapper JAR; CI pins Gradle itself.
       - name: Run deterministic unit tests
-        run: gradle --no-daemon --warning-mode all test
+        id: tests
+        continue-on-error: true
+        run: gradle --no-daemon --warning-mode all test --stacktrace
+
+      # Surface failures as GitHub annotations rather than log text only. Job logs are not
+      # always retrievable, and an unreadable failure costs a whole debug cycle; annotations are
+      # available through the checks API and pinpoint the failing test and message.
+      - name: Report failing tests
+        if: steps.tests.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          found = False
+          for path in glob.glob('app/build/test-results/**/TEST-*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in list(case.findall('failure')) + list(case.findall('error')):
+                      found = True
+                      name = f"{case.get('classname')}.{case.get('name')}"
+                      text = (bad.get('message') or bad.text or 'test failed')[:900]
+                      text = text.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+                      print(f'::error title=Test failed {name}::{text}')
+          if not found:
+              print('::error title=Build failure::Tests task failed without producing a test report; this is usually a compilation or Gradle configuration error.')
+          PY
+          exit 1
 
       # Runs before the APK is assembled so a dependency that smuggles in a network
       # permission fails loudly and early rather than shipping. See the task's KDoc in

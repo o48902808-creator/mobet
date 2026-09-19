@@ -147,18 +147,19 @@ android {
  */
 androidComponents {
     onVariants { variant ->
+        val capitalized = variant.name.replaceFirstChar(Char::uppercase)
         val verify = tasks.register<VerifyNoNetworkPermission>(
-            "verify${variant.name.replaceFirstChar(Char::uppercase)}NoNetworkPermission"
+            "verify${capitalized}NoNetworkPermission"
         ) {
             group = "verification"
             description = "Fails if the merged ${variant.name} manifest declares network permissions."
             mergedManifest.set(variant.artifacts.get(SingleArtifact.MERGED_MANIFEST))
         }
         // assemble* must not succeed without this having run.
-        tasks.named("assemble${variant.name.replaceFirstChar(Char::uppercase)}") {
-            dependsOn(verify)
-        }
-        tasks.named("check") { dependsOn(verify) }
+        //
+        // Deliberately NOT wired into `check`: `check` already depends on `test`, and adding a
+        // manifest-merge dependency there creates a cycle. CI invokes the verify tasks directly.
+        tasks.named("assemble$capitalized") { dependsOn(verify) }
     }
 }
 
