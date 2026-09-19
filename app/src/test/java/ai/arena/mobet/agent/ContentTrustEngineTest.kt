@@ -75,7 +75,7 @@ class ContentTrustEngineTest {
             "Share photo", "Upload file", "Check for updates", "System", "Developer options",
             "Do not disturb", "Skip", "New task", "New rule", "New message", "Email",
             "Verify your identity", "Post", "Security", "Privacy & security", "Share",
-            "Confirm payment of $42.00"
+            "Confirm payment of \$42.00"
         ).forEach(::assertClean)
     }
 
