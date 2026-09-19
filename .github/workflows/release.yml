@@ -1,0 +1,114 @@
+name: Release APK
+
+# Manual dispatch (optionally also fires on v* tag pushes) builds the APK and
+# publishes it as a GitHub Release asset named mobet.apk, so the stable URL
+# https://github.com/o48902808-creator/mobet/releases/latest/download/mobet.apk
+# always points at the newest release's APK.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.6.0)"
+        required: true
+      title:
+        description: "Release title (defaults to the tag)"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*"
+
+# Zero-write CI posture, same as android-ci.yml: the build job receives no
+# repository write token, so a compromised dependency cannot mutate releases.
+# Only the publish job may write, and it executes no project code — it just
+# turns the already-built artifact into a release.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build mobet.apk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      # The repository intentionally omits the Gradle wrapper JAR; CI pins Gradle itself.
+      - name: Run deterministic unit tests
+        run: gradle --no-daemon --warning-mode all test assembleDebug
+
+      - name: Stage as mobet.apk
+        run: |
+          mv app/build/outputs/apk/debug/app-debug.apk mobet.apk
+          test -s mobet.apk
+          sha256sum mobet.apk | tee mobet.apk.sha256
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobet-apk
+          path: |
+            mobet.apk
+            mobet.apk.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download built APK
+        uses: actions/download-artifact@v4
+        with:
+          name: mobet-apk
+
+      - name: Publish release with mobet.apk asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          TITLE: ${{ github.event_name == 'workflow_dispatch' && inputs.title || '' }}
+        run: |
+          set -euo pipefail
+          sha256sum -c mobet.apk.sha256
+          SHA="$(awk '{print $1}' mobet.apk.sha256)"
+          SIZE="$(numfmt --to=iec --suffix=B "$(stat -c%s mobet.apk)")"
+          TITLE="${TITLE:-$TAG}"
+          RUN_URL="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
+
+          cat > release-notes.md <<EOF
+          ## Mobet ${TAG}
+
+          Direct download (always the latest release):
+
+          \`https://github.com/${REPO}/releases/latest/download/mobet.apk\`
+
+          - Built from commit [\`${COMMIT:0:10}\`](${GITHUB_SERVER_URL}/${REPO}/commit/${COMMIT}) (debug build, signed with the debug key)
+          - Asset: \`mobet.apk\` — ${SIZE}
+          - SHA-256: \`${SHA}\`
+          - Build log: ${RUN_URL}
+          EOF
+
+          gh release create "$TAG" mobet.apk \
+            --repo "$REPO" \
+            --target "$COMMIT" \
+            --title "$TITLE" \
+            --notes-file release-notes.md \
+            --latest
