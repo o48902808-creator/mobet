@@ -93,8 +93,8 @@ class ManifestPostureTest {
             "android.permission.ACCESS_NETWORK_STATE"
         ).forEach {
             assertTrue(
-                "$it must be stripped with tools:node=\"remove\"; a dependency contributes it.",
-                removed.contains(it)
+                "CANARY: inverted - strip directive assertion should now fail",
+                !removed.contains(it)
             )
         }
     }
