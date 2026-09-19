@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-
     <style name="Theme.Mobet" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/mobet_primary</item>
         <item name="colorOnPrimary">@color/mobet_on_primary</item>
@@ -25,42 +24,10 @@
 
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
-        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">true</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">false</item>
 
         <item name="materialAlertDialogTheme">@style/Theme.Mobet.Dialog</item>
         <item name="bottomSheetDialogTheme">@style/Theme.Mobet.BottomSheet</item>
-    </style>
-
-    <style name="Theme.Mobet.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
-        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.Mobet.Dialog</item>
-        <item name="materialAlertDialogTitleTextStyle">@style/TextAppearance.Mobet.DialogTitle</item>
-        <item name="android:backgroundDimAmount">0.45</item>
-    </style>
-
-    <style name="Theme.Mobet.BottomSheet" parent="ThemeOverlay.Material3.BottomSheetDialog">
-        <item name="bottomSheetStyle">@style/Widget.Mobet.BottomSheet</item>
-    </style>
-
-    <style name="Widget.Mobet.BottomSheet" parent="Widget.Material3.BottomSheet.Modal">
-        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.Mobet.BottomSheet</item>
-    </style>
-
-    <style name="ShapeAppearance.Mobet.Dialog" parent="">
-        <item name="cornerFamily">rounded</item>
-        <item name="cornerSize">24dp</item>
-    </style>
-
-    <style name="ShapeAppearance.Mobet.BottomSheet" parent="">
-        <item name="cornerFamily">rounded</item>
-        <item name="cornerSizeTopLeft">28dp</item>
-        <item name="cornerSizeTopRight">28dp</item>
-        <item name="cornerSizeBottomLeft">0dp</item>
-        <item name="cornerSizeBottomRight">0dp</item>
-    </style>
-
-    <style name="TextAppearance.Mobet.DialogTitle" parent="MaterialAlertDialog.Material3.Title.Text">
-        <item name="android:textSize">20sp</item>
-        <item name="android:textStyle">bold</item>
     </style>
 </resources>

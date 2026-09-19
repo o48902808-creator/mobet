@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="mobet_screen_padding">16dp</dimen>
+    <dimen name="mobet_card_padding">16dp</dimen>
+    <dimen name="mobet_card_radius">20dp</dimen>
+    <dimen name="mobet_button_radius">14dp</dimen>
+    <dimen name="mobet_input_radius">14dp</dimen>
+    <dimen name="mobet_gap">12dp</dimen>
+    <dimen name="mobet_gap_small">8dp</dimen>
+    <dimen name="mobet_gap_large">20dp</dimen>
+    <dimen name="mobet_touch_target">48dp</dimen>
+    <dimen name="mobet_tile_height">78dp</dimen>
+    <dimen name="mobet_editor_min_height">220dp</dimen>
+</resources>

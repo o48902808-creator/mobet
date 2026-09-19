@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark palette: the control-room look Mobet shipped with, rebuilt on Material 3 roles. -->
+    <color name="mobet_primary">#B8B9FF</color>
+    <color name="mobet_on_primary">#20207A</color>
+    <color name="mobet_primary_container">#31318E</color>
+    <color name="mobet_on_primary_container">#E2E1FF</color>
+
+    <color name="mobet_secondary">#7FD5DA</color>
+    <color name="mobet_on_secondary">#003739</color>
+    <color name="mobet_secondary_container">#004F53</color>
+    <color name="mobet_on_secondary_container">#9FF1F5</color>
+
+    <color name="mobet_background">#0E1016</color>
+    <color name="mobet_on_background">#E6E6F0</color>
+    <color name="mobet_surface">#161923</color>
+    <color name="mobet_on_surface">#E6E6F0</color>
+    <color name="mobet_surface_variant">#232735</color>
+    <color name="mobet_on_surface_variant">#B9BBCC</color>
+    <color name="mobet_surface_container">#1B1F2A</color>
+    <color name="mobet_outline">#3A3F50</color>
+
+    <color name="mobet_error">#FFB4AB</color>
+    <color name="mobet_on_error">#690005</color>
+
+    <color name="mobet_success">#6EDCA5</color>
+    <color name="mobet_warning">#F5BE69</color>
+    <color name="mobet_danger">#FF8A80</color>
+    <color name="mobet_code_background">#10131B</color>
+    <color name="mobet_code_text">#D7DBE8</color>
+    <color name="mobet_scrim">#99000000</color>
+    <color name="mobet_danger_container">#3B2220</color>
+    <color name="mobet_warning_container">#35290F</color>
+</resources>

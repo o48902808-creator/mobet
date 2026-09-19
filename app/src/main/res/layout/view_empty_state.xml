@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:paddingTop="28dp"
+    android:paddingBottom="28dp">
+
+    <ImageView
+        android:id="@+id/emptyIcon"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:alpha="0.55"
+        android:contentDescription="@null"
+        app:tint="?attr/colorOnSurfaceVariant"
+        tools:src="@drawable/ic_info" />
+
+    <TextView
+        android:id="@+id/emptyTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="center"
+        android:textAppearance="@style/TextAppearance.Material3.TitleSmall"
+        android:textColor="?attr/colorOnSurface"
+        tools:text="Nothing recorded yet" />
+
+    <TextView
+        android:id="@+id/emptyBody"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:gravity="center"
+        android:textAppearance="@style/TextAppearance.Mobet.Body"
+        tools:text="Run a workflow and events will appear here." />
+</LinearLayout>
