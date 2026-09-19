@@ -34,6 +34,33 @@ Mobet is an Android-first, on-device mobile automation prototype. It uses Androi
 - **Risk-aware goal compiler** — the offline planner now shares the exact same `RiskEngine` as the runner, inserts confirmations with the *reason* attached, grounds `fill` clauses only against editable elements, understands `go back` and `scroll`, and uses typo-tolerant fuzzy grounding.
 - **JVM unit test suite + CI** — deterministic components (risk engine, validator, fuzzy matcher, resolver, fingerprints, planner, simulator, parser) are covered by plain JUnit tests, run in GitHub Actions on every push alongside a debug APK build.
 
+## Interface
+
+Mobet's control surface is a Material 3 layout organised around the task you are doing, not
+the order the features were built.
+
+- **Service card** — the enabled/disabled state is the first thing on screen, tinted green or
+  red, with the Accessibility shortcut shown only while it is still needed. `Run workflow`
+  stays disabled until the service is connected, so the primary action can never silently fail.
+- **Workflow editor** — a monospaced JSON field with one-tap reformatting and a full-screen
+  editing mode. Summary chips parse the buffer on every keystroke and report the target
+  package, step budget, runtime budget, visual-fallback and self-healing posture, and the
+  policy verdict, so an invalid plan is visible while you type rather than at run time.
+- **Plan & autonomy / Inspect & verify** — the twelve former buttons are grouped into two
+  labelled tiles grids with icons: generate plan, bounded agent run, dry run; inspect screen,
+  diagnostics, captures, audit ledger, agent memory, validate policy.
+- **Activity log** — a timestamped, scrollable history of the last 80 events replaces the
+  single overwritten status line, so nothing is lost when a message is superseded. Important
+  messages also raise a tone-coded snackbar anchored above the run bar.
+- **Report sheets** — diagnostics, ledger, dry-run output, memory, OCR results and validation
+  results open in scrollable bottom sheets with selectable monospaced text, pass/fail banners
+  and purpose-built empty states, instead of truncated alert dialogs.
+- **Safety affordances** — the hardened `APPROVE` confirmation keeps its Confirm button
+  disabled until the exact word is typed, and every destructive control (clear ledger, clear
+  agent memory, delete a secret or capture) is behind an explicit second confirmation.
+- Edge-to-edge insets, 48dp touch targets, content descriptions, a light/dark palette mapped
+  to Material 3 colour roles, and an in-app "How Mobet works" sheet.
+
 ## Current MVP
 
 - Launch an installed application by package name
