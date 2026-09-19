@@ -84,7 +84,27 @@ jobs:
       # permission fails loudly and early rather than shipping. See the task's KDoc in
       # app/build.gradle.kts for why the merged manifest is the thing being checked.
       - name: Verify no network permission in merged manifest
-        run: gradle --no-daemon --warning-mode all verifyDebugNoNetworkPermission verifyReleaseNoNetworkPermission
+        id: netcheck
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          gradle --no-daemon --warning-mode all \
+            verifyDebugNoNetworkPermission verifyReleaseNoNetworkPermission 2>&1 \
+            | tee /tmp/netcheck.log
+
+      - name: Report network-permission findings
+        if: steps.netcheck.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          log = open('/tmp/netcheck.log', errors='replace').read()
+          start = log.find('* What went wrong:')
+          excerpt = log[start:start + 2000] if start != -1 else log[-2000:]
+          for line in excerpt.splitlines():
+              s = line.strip()
+              if s:
+                  print(f'::error title=Network permission check::{s[:900].replace("%", "%25")}')
+          PY
+          exit 1
 
       - name: Run Android security lint
         id: lint
