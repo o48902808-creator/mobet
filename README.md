@@ -36,6 +36,13 @@ Mobet is an Android-first, on-device mobile automation prototype. It uses Androi
 
 ## Interface
 
+![Mobet redesigned interface](docs/screenshots/overview.png)
+
+> The previews above are rendered from the app's own resource files (`colors.xml`,
+> `dimens.xml`, `strings.xml` and the `ic_*.xml` vector paths) so they cannot drift from what
+> the app ships. They approximate Android's layout engine rather than being emulator captures —
+> verify on a device before relying on exact metrics.
+
 Mobet's control surface is a Material 3 layout organised around the task you are doing, not
 the order the features were built.
 
