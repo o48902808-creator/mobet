@@ -126,6 +126,26 @@ class MainActivity : AppCompatActivity() {
         refreshServiceState()
     }
 
+    /**
+     * Persists the editor draft whenever the activity stops being interactive.
+     *
+     * The draft used to be written only inside [runWorkflow], so a rotation, an incoming call,
+     * or the system reclaiming memory mid-edit silently discarded unsaved JSON. With
+     * `allowBackup=false` and no other copy of the text, that work was unrecoverable. Saving in
+     * onPause covers configuration changes and process death alike, which is more reliable than
+     * onSaveInstanceState alone because it also survives the app being killed in the background.
+     */
+    override fun onPause() {
+        super.onPause()
+        persistDraft()
+    }
+
+    /** Writes the current editor text to the draft slot that [loadWorkflowSource] restores. */
+    private fun persistDraft() {
+        if (!::editor.isInitialized) return
+        getPreferences(MODE_PRIVATE).edit().putString("workflow", editor.text.toString()).apply()
+    }
+
     override fun onDestroy() {
         unregisterReceiver(receiver)
         super.onDestroy()
@@ -1247,7 +1267,7 @@ class MainActivity : AppCompatActivity() {
         try {
             val source = editor.text.toString()
             val workflow = Workflow.parse(source)
-            getPreferences(MODE_PRIVATE).edit().putString("workflow", source).apply()
+            persistDraft()
             showBusy(true)
             service.run(workflow)
         } catch (error: Exception) {
