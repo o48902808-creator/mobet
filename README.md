@@ -230,6 +230,7 @@ workflow loaded — you still press **Run**.
 ## Safety and platform notes
 
 - Android displays a strong warning when enabling accessibility access because this capability can read and operate screen content. Only enable services you trust.
+- **Mobet holds no network permission, and the build enforces it.** Because a screen-reading accessibility service plus network egress is an exfiltration channel, `:app:verifyDebugNoNetworkPermission` inspects the *merged* manifest and fails the build if any network permission survives — including one contributed by a dependency. ML Kit's OCR pulls in a telemetry library that declares `INTERNET`; it is stripped with `tools:node="remove"`, since on-device OCR does not need it. You can verify the claim yourself with `aapt dump permissions` on any APK.
 - Mobet runs only a workflow or bounded Apex goal explicitly started in its foreground UI and offers Stop. Sensitive actions still require blocking confirmation; remote triggers remain disabled, and optional model assistance has no execution authority.
 - Package discovery uses a least-privilege launcher `<queries>` declaration rather than `QUERY_ALL_PACKAGES`; non-launchable/private packages are intentionally outside the picker and autonomous launch boundary.
 - Secure fields, CAPTCHAs, biometrics, protected windows, and apps with poor accessibility metadata may not be automatable and should not be bypassed.
@@ -295,9 +296,12 @@ Every target must resolve confidently and uniquely against the inspected accessi
 
 JVM unit tests cover every deterministic component: `RiskEngine` tiers, `PlanValidator` rules, `FuzzyText` similarity, `SelectorResolver` healing and abstention, `ScreenFingerprint` stability, `GoalPlanner` grounding/rejection, `PlanSimulator` reports (including secret masking), and `Workflow` parsing bounds.
 
+Security posture is asserted rather than assumed: `ManifestPostureTest` locks the permission set, unexported components, and disabled backup; `VerifyNoNetworkPermission` checks the merged manifest; and `InjectionDefenceInDepthTest` proves containment holds with the injection detector deliberately bypassed, since a heuristic detector will eventually be evaded.
+
 ```bash
-gradle test            # run the JVM unit suite
-gradle assembleDebug   # build the debug APK
+gradle test                            # run the JVM unit suite
+gradle verifyDebugNoNetworkPermission  # assert the merged manifest has no network access
+gradle assembleDebug                   # build the debug APK (depends on the check above)
 ```
 
 GitHub Actions (`.github/workflows/android-ci.yml`) runs both on every push and pull request and uploads test reports plus the debug APK as artifacts.
