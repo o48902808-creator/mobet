@@ -33,8 +33,8 @@ class InjectionDefenceInDepthTest {
         )
         val violations = AgentPlanValidator.validate(goal.copy(maxRisk = 40), listOf(hostile))
         assertTrue(
-            "CANARY: inverted - risk ceiling assertion should now fail",
-            violations.none { it.message.contains("risk") }
+            "risk ceiling must reject the action regardless of trust classification",
+            violations.any { it.message.contains("risk") }
         )
     }
 
