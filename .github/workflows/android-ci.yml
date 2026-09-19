@@ -34,7 +34,29 @@ jobs:
       - name: Run deterministic unit tests
         id: tests
         continue-on-error: true
-        run: gradle --no-daemon --warning-mode all test --stacktrace
+        run: |
+          set -o pipefail
+          gradle --no-daemon --warning-mode all test --stacktrace 2>&1 | tee /tmp/gradle-test.log
+
+      # Compiler and Gradle configuration errors never reach the XML reports, so echo them
+      # directly as annotations. Without this a build failure is invisible wherever raw job
+      # logs cannot be downloaded.
+      - name: Report build errors
+        if: steps.tests.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          import re
+          log = open('/tmp/gradle-test.log', errors='replace').read()
+          lines = [l for l in log.splitlines()
+                   if re.search(r'^e: |error:|FAILURE:|Caused by:|Could not |Unresolved reference|What went wrong', l)]
+          for l in lines[:40]:
+              msg = l.strip()[:900].replace('%', '%25')
+              print(f'::error title=Build error::{msg}')
+          if not lines:
+              print('::error title=Build error::Gradle failed; see the tail of the log below.')
+              for l in log.splitlines()[-40:]:
+                  print(l)
+          PY
 
       # Surface failures as GitHub annotations rather than log text only. Job logs are not
       # always retrievable, and an unreadable failure costs a whole debug cycle; annotations are
