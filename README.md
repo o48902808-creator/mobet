@@ -175,7 +175,18 @@ Define non-sensitive values in the root `variables` object and reference them as
 }
 ```
 
-### Cross-app workflows
+### Finding your way around
+
+![Searchable picker and highlighted editor](docs/screenshots/phase3-ux.png)
+
+The app pickers filter as you type once a list gets long — useful when a device
+has a few hundred launchable apps — and show each app's real launcher icon, so
+you can pick by sight instead of reading package names. The workflow editor
+colours JSON as you type, and deleting a saved workflow or a builder step can be
+reversed from the snackbar. Deleting a *secret* cannot be undone, and says so:
+Mobet can't read an encrypted value back in order to restore it.
+
+## Cross-app workflows
 
 `launch` switches automation to another application, enabling workflows that span apps.
 It is the only action that can move Mobet outside the current package, so the destination
