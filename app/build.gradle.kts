@@ -11,8 +11,8 @@ android {
         applicationId = "ai.arena.mobet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.6.0"
+        versionCode = 8
+        versionName = "0.7.0"
         // The whole icon set is vector drawables; no raster assets are shipped.
         vectorDrawables.useSupportLibrary = true
     }
