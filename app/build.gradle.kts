@@ -1,6 +1,73 @@
+import com.android.build.api.artifact.SingleArtifact
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+/**
+ * Fails the build if the *merged* manifest declares a network permission.
+ *
+ * "Mobet cannot reach the network" is the one security property a user can verify without
+ * trusting us, and it is the property that collapses screen-reading + exfiltration into an
+ * inert capability. Checking the source manifest would be pointless: the risk is a transitive
+ * dependency contributing `INTERNET` through manifest merging, which is invisible in our own
+ * file and silent at runtime. So this reads the merged output, after AGP has combined every
+ * library manifest.
+ *
+ * To intentionally add network access, remove the permission from [FORBIDDEN_PERMISSIONS] in a
+ * reviewed commit and update docs/THREAT_MODEL.md. That is the point: it should be a deliberate,
+ * visible decision rather than something a dependency bump can do by accident.
+ */
+abstract class VerifyNoNetworkPermission : DefaultTask() {
+
+    @get:InputFile
+    abstract val mergedManifest: RegularFileProperty
+
+    @TaskAction
+    fun verify() {
+        val text = mergedManifest.get().asFile.readText()
+        // Match the permission name as a whole attribute value so that, e.g.,
+        // a custom "com.example.INTERNET_THING" cannot be mistaken for the platform permission.
+        val declared = FORBIDDEN_PERMISSIONS.filter { permission ->
+            Regex("""android:name\s*=\s*"${Regex.escape(permission)}"""").containsMatchIn(text)
+        }
+        if (declared.isEmpty()) return
+
+        throw GradleException(
+            buildString {
+                appendLine("Merged manifest declares forbidden network permission(s):")
+                declared.forEach { appendLine("  - $it") }
+                appendLine()
+                appendLine("Mobet holds an accessibility service that can read every screen the")
+                appendLine("user visits. Combined with network access that is an exfiltration")
+                appendLine("channel, so the absence of these permissions is a load-bearing")
+                appendLine("invariant documented in docs/THREAT_MODEL.md.")
+                appendLine()
+                appendLine("A dependency most likely contributed this via manifest merging. Run")
+                appendLine("  gradle :app:processDebugMainManifest --info")
+                appendLine("and inspect the merger report to find the contributing library. Remove")
+                appendLine("it, or strip the permission with tools:node=\"remove\".")
+                appendLine()
+                appendLine("If network access is genuinely intended, this must be a deliberate,")
+                appendLine("reviewed change: edit FORBIDDEN_PERMISSIONS in app/build.gradle.kts")
+                appendLine("and update the threat model in the same commit.")
+            }
+        )
+    }
+
+    companion object {
+        val FORBIDDEN_PERMISSIONS = listOf(
+            "android.permission.INTERNET",
+            "android.permission.ACCESS_NETWORK_STATE",
+            "android.permission.ACCESS_WIFI_STATE",
+            "android.permission.CHANGE_NETWORK_STATE",
+            "android.permission.CHANGE_WIFI_STATE",
+            "android.permission.NEARBY_WIFI_DEVICES",
+            "android.permission.BLUETOOTH_CONNECT",
+            "android.permission.BLUETOOTH_SCAN"
+        )
+    }
 }
 
 android {
@@ -71,6 +138,27 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+    }
+}
+
+/*
+ * Register the merged-manifest network check for every variant and make `check` depend on it,
+ * so it runs in CI alongside the unit tests rather than needing a bespoke workflow step.
+ */
+androidComponents {
+    onVariants { variant ->
+        val verify = tasks.register<VerifyNoNetworkPermission>(
+            "verify${variant.name.replaceFirstChar(Char::uppercase)}NoNetworkPermission"
+        ) {
+            group = "verification"
+            description = "Fails if the merged ${variant.name} manifest declares network permissions."
+            mergedManifest.set(variant.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+        }
+        // assemble* must not succeed without this having run.
+        tasks.named("assemble${variant.name.replaceFirstChar(Char::uppercase)}") {
+            dependsOn(verify)
+        }
+        tasks.named("check") { dependsOn(verify) }
     }
 }
 

@@ -20,6 +20,8 @@
 ## Enforced invariants
 
 - Screen and model text are untrusted data, never policy instructions.
+- The absence of network permissions is enforced, not assumed: `ManifestPostureTest` asserts the source manifest and the Gradle task `verify<Variant>NoNetworkPermission` asserts the **merged** manifest, so a transitive dependency cannot contribute `INTERNET` through manifest merging. `assemble` and `check` both depend on it.
+- Injection detection is a *signal, not a boundary*. `ContentTrustEngine` is a heuristic that will eventually be evaded; containment does not depend on it. `InjectionDefenceInDepthTest` proves the risk ceiling, irreversibility rule, cycle budget, and model-ranking allowlist all hold with the detector deliberately bypassed.
 - A proposed action is canonicalized against a fresh accessibility snapshot immediately before use.
 - Live package provenance is checked before action execution and before success evidence.
 - Risk is recomputed from the canonical selector and visible label; planner-provided risk is ignored.
@@ -39,6 +41,40 @@
 ## Privacy posture
 
 The manifest contains no internet permission. Agent memory excludes visible labels, OCR text, entered values, secrets, and screenshots; it stores package names, app versions, structural screen/action hashes, outcomes, confidence, timestamps, failure classes, and repair hashes. Consented screenshots stay in private app storage. Mobet's own activity uses `FLAG_SECURE` and Android backup is disabled.
+
+## If network access is ever added
+
+Mobet currently declares no network permission, and that is enforced by the checks listed above.
+This section records what a reviewed change would have to satisfy, so that the decision is made
+against a written standard rather than improvised.
+
+**Why the constraint is load-bearing.** Mobet holds an accessibility service that can read every
+label on every screen the user visits. *Screen reading + network egress = exfiltration channel*,
+regardless of intent. Withholding `INTERNET` removes that capability at the kernel level, and it
+is the one security property a user can verify without trusting the implementation.
+
+**A per-process split is not a security boundary.** `INTERNET` is granted per-UID, not
+per-process. Once the app holds it, any process in it — including the accessibility service — can
+open a socket. `android:process=":net"` provides crash and memory isolation only. The sole
+OS-enforced split is two APKs with distinct UIDs (`mobet` with accessibility and no `INTERNET`,
+a companion with `INTERNET` and no accessibility) communicating over a bound AIDL interface.
+
+**Requirements for any networked feature:**
+
+1. Prefer designs that need no network at all. On-device models (e.g. bundled weights loaded from
+   an APK asset) deliver the capability without spending the invariant; download-on-first-run does
+   not.
+2. Egress must be declaratively allowlisted via `network-security-config` with
+   `cleartextTrafficPermitted="false"` and certificate pinning to a single domain, so a
+   compromised dependency cannot reach an arbitrary host.
+3. Secrets must be structurally unable to cross the boundary. The network module must not depend
+   on `SecretStore`.
+4. Screen text, OCR output, and entered values must never be transmitted. Agent memory already
+   stores structural hashes rather than labels; that line holds at the wire.
+5. Anything received is untrusted input and re-enters through `PlanValidator` and `RiskEngine`
+   exactly like an imported file. **Nothing arriving over the network may widen the action set.**
+6. A remote planner may return canonical action *IDs* only, resolved locally against a live
+   snapshot, and must abstain rather than guess below a confidence floor.
 
 ## Non-goals and residual risks
 

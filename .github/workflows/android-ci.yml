@@ -34,6 +34,12 @@ jobs:
       - name: Run deterministic unit tests
         run: gradle --no-daemon --warning-mode all test
 
+      # Runs before the APK is assembled so a dependency that smuggles in a network
+      # permission fails loudly and early rather than shipping. See the task's KDoc in
+      # app/build.gradle.kts for why the merged manifest is the thing being checked.
+      - name: Verify no network permission in merged manifest
+        run: gradle --no-daemon --warning-mode all verifyDebugNoNetworkPermission verifyReleaseNoNetworkPermission
+
       - name: Run Android security lint
         id: lint
         continue-on-error: true
