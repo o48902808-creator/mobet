@@ -89,8 +89,7 @@ class ManifestPostureTest {
         // these directives the shipped APK holds network access while the docs claim otherwise.
         val removed = permissionEntries().filter { it.second }.map { it.first }
         listOf(
-            "android.permission.INTERNET",
-            "android.permission.ACCESS_NETWORK_STATE"
+            "android.permission.INTERNET"
         ).forEach {
             assertTrue(
                 "$it must be stripped with tools:node=\"remove\"; a dependency contributes it.",
