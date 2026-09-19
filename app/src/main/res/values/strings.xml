@@ -10,6 +10,10 @@
     <string name="service_enabled_detail">Mobet can read labels and operate controls in apps you target. Nothing runs until you start it.</string>
     <string name="service_disabled_detail">Enable Mobet in Android Accessibility settings to let it run the workflows you start.</string>
     <string name="open_accessibility_settings">Open accessibility settings</string>
+    <string name="restricted_help_link">Toggle greyed out or “Restricted setting”?</string>
+    <string name="restricted_title">Unblock restricted settings</string>
+    <string name="restricted_subtitle">Android blocks Accessibility for sideloaded apps</string>
+    <string name="restricted_open_app_info">Open Mobet app info</string>
 
     <!-- Workflow card -->
     <string name="section_workflow">Workflow</string>

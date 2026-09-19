@@ -157,6 +157,7 @@ class MainActivity : AppCompatActivity() {
             runCatching { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
                 .onFailure { showStatus("Could not open Accessibility settings", Tone.DANGER) }
         }
+        findViewById<View>(R.id.restrictedHelp).setOnClickListener { showRestrictedSettingsHelp() }
         findViewById<View>(R.id.formatJson).setOnClickListener { formatWorkflowJson() }
         findViewById<View>(R.id.expandEditor).setOnClickListener { showEditorFullScreen() }
         findViewById<View>(R.id.saveWorkflow).setOnClickListener { saveToLibrary() }
@@ -942,8 +943,11 @@ class MainActivity : AppCompatActivity() {
         serviceDot.background?.mutate()?.let { DrawableCompat.setTint(it, color) }
         serviceState.setTextColor(color)
         serviceCard.strokeColor = (color and 0x00FFFFFF) or 0x55000000
-        findViewById<View>(R.id.openAccessibility).visibility =
-            if (enabled) View.GONE else View.VISIBLE
+        // Both the shortcut and the restricted-settings explainer are only useful while the
+        // service is still off.
+        val setupVisibility = if (enabled) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.openAccessibility).visibility = setupVisibility
+        findViewById<View>(R.id.restrictedHelp).visibility = setupVisibility
         findViewById<View>(R.id.runWorkflow).isEnabled = enabled
     }
 
@@ -982,6 +986,52 @@ class MainActivity : AppCompatActivity() {
     private fun copyToClipboard(label: String, value: String) {
         (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
             .setPrimaryClip(ClipData.newPlainText(label, value))
+    }
+
+    // ── Restricted settings (Android 13+) ────────────────────────────────────
+
+    /**
+     * Android 13 gates Accessibility behind "restricted settings" for apps installed outside a
+     * store session, so a sideloaded Mobet shows a greyed-out toggle and a "Restricted setting"
+     * dialog. The switch is not broken — the user has to allow restricted settings from the App
+     * info page first. Surfacing that here saves a confusing detour through Android's UI.
+     */
+    private fun showRestrictedSettingsHelp() {
+        MobetUi.ReportSheet(this)
+            .title(getString(R.string.restricted_title), R.drawable.ic_warning)
+            .subtitle(getString(R.string.restricted_subtitle))
+            .paragraph(
+                "Android blocks Accessibility access for apps installed from outside an app " +
+                    "store — the toggle stays greyed out and tapping it shows “Restricted " +
+                    "setting”. Nothing is wrong with Mobet; the permission has to be unlocked " +
+                    "once from the App info page."
+            )
+            .rows(
+                listOf(
+                    Row("1 · Open Mobet's App info", "Use the button below, or Settings › Apps › Mobet", R.drawable.ic_info, showChevron = false),
+                    Row("2 · Tap the ⋮ menu, top-right", "It is on the App info screen itself, not in Accessibility", R.drawable.ic_chevron_right, showChevron = false),
+                    Row("3 · Tap “Allow restricted settings”", "Confirm with your PIN, pattern or biometric", R.drawable.ic_check, showChevron = false),
+                    Row("4 · Return to Accessibility", "Mobet automation can now be switched on", R.drawable.ic_accessibility, showChevron = false)
+                )
+            )
+            .paragraph(
+                "No “Allow restricted settings” entry? Some OEM builds (Xiaomi, Samsung, Realme) " +
+                    "move or gate it. Installing over adb with “adb install -r -g”, or running " +
+                    "from Android Studio, is exempt from this restriction."
+            )
+            .action(getString(R.string.restricted_open_app_info), primary = true) { openAppInfo() }
+            .action(getString(R.string.action_close))
+            .show()
+    }
+
+    /** Deep-links to this app's own App info page, where restricted settings are unlocked. */
+    private fun openAppInfo() {
+        val intent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            android.net.Uri.fromParts("package", packageName, null)
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { startActivity(intent) }
+            .onFailure { showStatus("Could not open App info — use Settings › Apps › Mobet", Tone.DANGER) }
     }
 
     // ── Help ─────────────────────────────────────────────────────────────────

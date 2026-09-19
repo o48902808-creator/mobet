@@ -113,6 +113,26 @@ Prerequisites: Android Studio Ladybug or newer, Android SDK 35, and JDK 17.
 4. In Mobet, tap **Open accessibility settings**, select **Mobet automation**, and enable it.
 5. Return to Mobet and run the included Settings demo.
 
+### “Restricted setting” — the Accessibility toggle is greyed out
+
+On Android 13 and newer, Accessibility access is a **restricted setting**: apps installed
+outside an app-store session (for example by tapping a downloaded APK, such as the
+`mobet-debug-apk` CI artifact) cannot be granted it until the restriction is lifted. The
+toggle appears disabled and tapping it shows a *Restricted setting* dialog. Mobet is not
+broken — the permission is gated by the system.
+
+To unlock it:
+
+1. **Settings › Apps › See all apps › Mobet** — or tap **“Toggle greyed out?”** on Mobet's
+   home screen, which deep-links there.
+2. Tap the **⋮ menu in the top-right of the App info page** (not in the Accessibility menu).
+3. Tap **Allow restricted settings** and confirm with your PIN, pattern or biometric.
+4. Return to **Settings › Accessibility › Mobet automation** and enable it.
+
+Installs performed with `adb install -r -g app-debug.apk`, or launched from Android Studio,
+are exempt from this restriction. Some OEM skins (Xiaomi/HyperOS, Samsung One UI, Realme)
+relocate or further gate the option.
+
 > The repository intentionally does not commit the generated Gradle wrapper JAR. Android Studio can sync the project directly; you can also run `gradle wrapper` with Gradle 8.9 installed.
 
 ## Workflow format
