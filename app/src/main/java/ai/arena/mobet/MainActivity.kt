@@ -494,6 +494,9 @@ class MainActivity : AppCompatActivity() {
         showStatus("Running on-device OCR…")
         ai.arena.mobet.vision.OnDeviceTextRecognizer.recognize(bitmap) { result ->
             bitmap.recycle()
+            // OCR completes asynchronously; the user may have backgrounded Mobet meanwhile,
+            // and showing a dialog for a destroyed activity crashes with a window-token error.
+            if (isFinishing || isDestroyed) return@recognize
             showBusy(false)
             result.onSuccess { lines ->
                 val sheet = MobetUi.ReportSheet(this)

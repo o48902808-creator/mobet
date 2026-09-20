@@ -329,8 +329,11 @@ gradle connectedDebugAndroidTest       # on-device tests (SecretStore/Keystore, 
 On-device tests (`app/src/androidTest/`) cover what a JVM cannot: the Android Keystore
 boundary — `SecretStore` round-trips, corrupted payloads failing closed, and ciphertexts
 swapped between names being rejected via name-bound AAD — plus encrypted audit-ledger
-persistence and clear-without-tamper-alarm. The workflow's **Connected device tests** job
-runs them on an API 29 emulator on every push.
+persistence and clear-without-tamper-alarm. An Espresso suite locks the v0.7.0 control
+surface: service-disabled posture gates **Run workflow**, the bundled demo preloads the
+editor, drafts survive rotation, and Dry run / Validate policy open their reports without
+the service. The workflow's **Connected device tests** job runs them on an API 29 emulator
+on every push.
 
 GitHub Actions (`.github/workflows/android-ci.yml`) runs both on every push and pull request and uploads test reports plus the debug APK as artifacts.
 

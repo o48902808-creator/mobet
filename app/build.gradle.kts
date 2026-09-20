@@ -189,4 +189,7 @@ dependencies {
     // encrypted persistence (AuditLedger) cannot be meaningfully simulated on the JVM.
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
+    // View-level verification of the Material 3 control surface and rotation-safe draft
+    // persistence — the behaviour the walkthrough in docs/TESTING_WALKTHROUGH.md describes.
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
 }
