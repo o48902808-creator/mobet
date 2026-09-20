@@ -248,6 +248,11 @@ present, a confirmation prompt cannot be answered, a mis-grounded selector canno
 and Stop cannot be pressed. The reminder posts a notification that opens Mobet with the
 workflow loaded — you still press **Run**.
 
+Real scheduled execution has been proposed; it can only proceed under the constraints in
+[docs/SCHEDULED_RUNS_REVIEW.md](docs/SCHEDULED_RUNS_REVIEW.md), which requires per-workflow
+opt-in, LOW-risk/gate-free plans only, degrade-to-reminder on any violation, and an explicit
+maintainer sign-off. Until that gate is passed, this section remains the behaviour.
+
 ## Safety and platform notes
 
 - Android displays a strong warning when enabling accessibility access because this capability can read and operate screen content. Only enable services you trust.
