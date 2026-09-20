@@ -170,11 +170,11 @@ androidComponents {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.core:core-ktx:1.19.0")
+    implementation("androidx.appcompat:appcompat:1.8.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("androidx.constraintlayout:constraintlayout:2.2.0")
-    implementation("androidx.coordinatorlayout:coordinatorlayout:1.2.0")
+    implementation("androidx.constraintlayout:constraintlayout:2.2.2")
+    implementation("androidx.coordinatorlayout:coordinatorlayout:1.3.0")
     // Material 3 components: cards, bottom sheets, snackbars, chips, text fields.
     implementation("com.google.android.material:material:1.12.0")
     // Bundled on-device OCR model; no network connection is required at runtime.
