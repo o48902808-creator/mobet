@@ -140,10 +140,19 @@ class MainActivity : AppCompatActivity() {
         persistDraft()
     }
 
-    /** Writes the current editor text to the draft slot that [loadWorkflowSource] restores. */
+    /**
+     * Writes the current editor text to the draft slot that [loadWorkflowSource] restores.
+     *
+     * The caret offset is saved alongside it. Restoring the text but not the caret drops the
+     * user at position zero of a long workflow after every rotation, which for an editor this
+     * size is its own small data loss.
+     */
     private fun persistDraft() {
         if (!::editor.isInitialized) return
-        getPreferences(MODE_PRIVATE).edit().putString("workflow", editor.text.toString()).apply()
+        getPreferences(MODE_PRIVATE).edit()
+            .putString("workflow", editor.text.toString())
+            .putInt("workflow_caret", editor.selectionStart.coerceAtLeast(0))
+            .apply()
     }
 
     override fun onDestroy() {
@@ -250,9 +259,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadWorkflowSource() {
-        val sample = assets.open("sample_workflow.json").bufferedReader().use { it.readText() }
-        val saved = getPreferences(MODE_PRIVATE).getString("workflow", sample) ?: sample
+        val preferences = getPreferences(MODE_PRIVATE)
+        // A missing or unreadable asset must not take the whole activity down on launch.
+        val sample = runCatching {
+            assets.open("sample_workflow.json").bufferedReader().use { it.readText() }
+        }.getOrDefault(FALLBACK_WORKFLOW)
+        val saved = preferences.getString("workflow", sample) ?: sample
         editor.setText(saved)
+        // Clamp: the stored caret may exceed the text if the draft was replaced meanwhile.
+        editor.setSelection(preferences.getInt("workflow_caret", 0).coerceIn(0, saved.length))
         refreshWorkflowSummary()
     }
 
@@ -1500,6 +1515,19 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val ACTION_STOP_AUTONOMY = "ai.arena.mobet.STOP_AUTONOMY"
         const val ACTION_OPEN_WORKFLOW = "ai.arena.mobet.OPEN_WORKFLOW"
+
+        /**
+         * Minimal valid workflow, used only if the bundled sample asset cannot be read.
+         *
+         * Returning a parseable document rather than an empty string keeps the summary chips
+         * and the visual builder in a sane state instead of showing a parse error on first run.
+         */
+        private const val FALLBACK_WORKFLOW = """{
+  "name": "New workflow",
+  "steps": [
+    { "action": "wait", "text": "", "timeoutMs": 5000 }
+  ]
+}"""
 
         /** Runner phrases that mean no operation is in flight any more. */
         private val TERMINAL_MARKERS = listOf(
