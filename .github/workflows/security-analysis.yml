@@ -50,6 +50,14 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      # Requires Dependency graph (and GitHub Advanced Security on private repos) to be enabled
+      # in repository settings. It is not, so the action errors out and blocks every PR on a
+      # configuration problem rather than a real vulnerability. Kept non-blocking so it starts
+      # reporting automatically once the setting is turned on, without silently disappearing.
+      #
+      # To enable: Settings → Code security and analysis → Dependency graph.
+      # Once enabled, drop `continue-on-error` so moderate+ advisories block merges again.
       - uses: actions/dependency-review-action@v4
+        continue-on-error: true
         with:
           fail-on-severity: moderate
