@@ -164,18 +164,33 @@ class StepBuilder(
 
     private fun describe(item: JSONObject): String {
         val parts = buildList {
-            item.optString("text").takeIf(String::isNotBlank)?.let { add("text: $it") }
-            item.optString("viewId").takeIf(String::isNotBlank)?.let { add("id: $it") }
-            item.optString("description").takeIf(String::isNotBlank)?.let { add("desc: $it") }
-            item.optString("package").takeIf(String::isNotBlank)?.let { add("package: $it") }
-            item.optString("value").takeIf(String::isNotBlank)?.let {
-                // Never render a stored secret's value, only the reference.
-                add(if (it.startsWith("{{secret:")) "value: $it" else "value: $it")
-            }
-            item.optString("message").takeIf(String::isNotBlank)?.let { add("“$it”") }
+            item.optString("text").takeIf(String::isNotBlank)?.let { add("text: ${preview(it)}") }
+            item.optString("viewId").takeIf(String::isNotBlank)?.let { add("id: ${preview(it)}") }
+            item.optString("description").takeIf(String::isNotBlank)?.let { add("desc: ${preview(it)}") }
+            item.optString("package").takeIf(String::isNotBlank)?.let { add("package: ${preview(it)}") }
+            item.optString("value").takeIf(String::isNotBlank)?.let { add("value: ${preview(it)}") }
+            item.optString("message").takeIf(String::isNotBlank)?.let { add("“${preview(it)}”") }
             if (item.optString("action") == "delay") add("${item.optLong("delayMs", 300)} ms")
         }
         return parts.joinToString(" · ").ifBlank { "no parameters" }
+    }
+
+    /**
+     * Renders one field of a step card safely.
+     *
+     * A workflow can be imported from a shared file, so these strings are untrusted. Newlines are
+     * flattened -- the card allots two lines and a multi-line value would otherwise push the
+     * controls around or hide the rest of the summary -- and long values are clipped so one
+     * pathological field cannot crowd out the others.
+     *
+     * A `{{secret:name}}` reference is shown as-is on purpose. It is a *reference*, not a value;
+     * the stored secret is never read here, and hiding the name would leave the user unable to
+     * tell which credential a step uses.
+     */
+    private fun preview(value: String): String {
+        val flattened = value.replace(Regex("\\s+"), " ").trim()
+        return if (flattened.length <= MAX_FIELD_PREVIEW) flattened
+        else flattened.take(MAX_FIELD_PREVIEW).trimEnd() + "…"
     }
 
     // ── Mutation ─────────────────────────────────────────────────────────────
@@ -318,5 +333,8 @@ class StepBuilder(
     private companion object {
         /** Keys the visual form owns; everything else is carried through untouched. */
         val FORM_KEYS = setOf("action", "text", "value", "message", "package", "delayMs")
+
+        /** Per-field clip length on a step card, which allots two lines to the whole summary. */
+        const val MAX_FIELD_PREVIEW = 60
     }
 }

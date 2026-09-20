@@ -75,6 +75,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var highlighter: JsonHighlighter
     private var highlighting = false
 
+    /**
+     * Debounce for the live summary chips.
+     *
+     * Highlighting stays synchronous because it is direct visual feedback on the character just
+     * typed. The summary is not: rebuilding it means a full JSON parse, a PlanValidator pass and
+     * re-inflating every chip, which on a large workflow overruns the frame budget and makes the
+     * editor stutter exactly when the workflow is big enough to need the help.
+     */
+    private val summaryHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val summaryTask = Runnable { refreshWorkflowSummary() }
+
     /** Previous service state and tint, so changes can animate instead of snapping. */
     private var lastServiceEnabled: Boolean? = null
     private var currentServiceColor: Int? = null
@@ -156,6 +167,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        summaryHandler.removeCallbacks(summaryTask)
         unregisterReceiver(receiver)
         super.onDestroy()
     }
@@ -251,7 +263,8 @@ class MainActivity : AppCompatActivity() {
                 highlighting = true
                 s?.let { highlighter.apply(it) }
                 highlighting = false
-                refreshWorkflowSummary()
+                summaryHandler.removeCallbacks(summaryTask)
+                summaryHandler.postDelayed(summaryTask, SUMMARY_DEBOUNCE_MS)
             }
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
@@ -274,9 +287,11 @@ class MainActivity : AppCompatActivity() {
     // ── Live workflow summary chips ──────────────────────────────────────────
 
     /**
-     * Parses the editor content on every keystroke and surfaces the target package, step count
-     * and policy posture as chips. Invalid JSON shows a single error chip instead of failing
-     * silently at run time.
+     * Surfaces the target package, step count and policy posture as chips. Invalid JSON shows a
+     * single error chip instead of failing silently at run time.
+     *
+     * Called directly on load and debounced while typing, since it re-parses the whole document
+     * and re-inflates every chip.
      */
     private fun refreshWorkflowSummary() {
         workflowSummary.removeAllViews()
@@ -1528,6 +1543,9 @@ class MainActivity : AppCompatActivity() {
     { "action": "wait", "text": "", "timeoutMs": 5000 }
   ]
 }"""
+
+        /** Quiet period before the editor's summary chips are recomputed. */
+        private const val SUMMARY_DEBOUNCE_MS = 250L
 
         /** Runner phrases that mean no operation is in flight any more. */
         private val TERMINAL_MARKERS = listOf(

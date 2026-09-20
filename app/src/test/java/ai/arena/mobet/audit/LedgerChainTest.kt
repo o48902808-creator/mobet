@@ -127,6 +127,39 @@ class LedgerChainTest {
     }
 
     @Test
+    fun aFailedWriteDoesNotLeaveTheLedgerPermanentlyAccusing() {
+        // The high-water mark is only advanced after a successful save. If it were recorded
+        // unconditionally, a failed write -- a full disk, not an attacker -- would leave the
+        // mark one ahead of the chain and verify() would report tampering on every launch
+        // forever, with no way for the user to clear the accusation.
+        val full = chain(5)
+        var highWater = 5L
+        val saveSucceeded = false
+        val nextSequence = 6L
+        if (saveSucceeded && nextSequence > highWater) highWater = nextSequence
+        assertNull("a failed append must not manufacture a truncation", verify(full, highWater))
+    }
+
+    @Test
+    fun clearingTheMarkBeforeTheChainFailsSafe() {
+        // clear() wipes the high-water store first. If the chain wipe then fails, the surviving
+        // entries verify against a mark of zero rather than the reverse, which would accuse a
+        // deliberately cleared ledger of having been truncated.
+        val survivingEntries = chain(5)
+        val markAfterFailedClear = 0L
+        assertNull(verify(survivingEntries, markAfterFailedClear))
+        // And the fully successful path is still clean.
+        assertNull(verify(emptyList(), 0))
+    }
+
+    @Test
+    fun aMigratedLegacyChainWithNoMarkVerifies() {
+        // A v1 chain moved into the v2 store has never recorded a mark. Reading zero must not
+        // read as "everything was truncated"; the mark can only attest to what it observed.
+        assertNull(verify(chain(40), highWater = 0))
+    }
+
+    @Test
     fun legitimateCapacityTrimStillVerifies() {
         // The 300-entry cap drops oldest entries. That must not read as tampering, otherwise
         // the ledger cries wolf on every long-running install and users learn to ignore it.

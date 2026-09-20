@@ -46,8 +46,11 @@ class AuditLedger(context: Context) {
         val hash = ScreenFingerprint.sha256("$previousHash|$sequence|$timestamp|$event")
         val trimmed = (entries + LedgerEntry(sequence, timestamp, event, hash, previousHash))
             .takeLast(MAX_ENTRIES)
-        save(trimmed)
-        recordHighWater(sequence)
+        // Only advance the high-water mark once the entry is actually on disk. Recording it for
+        // a write that failed would leave the mark ahead of the chain forever, and verify()
+        // would report tampering on every launch for what was really a full disk. Under-
+        // recording is the safe direction: it can only miss a truncation, never invent one.
+        if (save(trimmed)) recordHighWater(sequence)
     }
 
     @Synchronized
@@ -101,8 +104,12 @@ class AuditLedger(context: Context) {
 
     @Synchronized
     fun clear() {
-        secureStore.clear()
+        // Order matters. Clearing the chain first and then failing to clear the mark would leave
+        // a high-water mark above an empty chain, so verify() would report a truncation attack
+        // on a ledger the user deliberately cleared. Clearing the mark first fails safe: if the
+        // chain clear then fails, the surviving entries simply verify against a mark of zero.
         highWaterStore.clear()
+        secureStore.clear()
         legacyPreferences.edit().clear().commit()
     }
 
@@ -138,7 +145,7 @@ class AuditLedger(context: Context) {
         emptyList()
     }
 
-    private fun save(entries: List<LedgerEntry>) {
+    private fun save(entries: List<LedgerEntry>): Boolean {
         val array = JSONArray()
         entries.forEach {
             array.put(
@@ -147,7 +154,7 @@ class AuditLedger(context: Context) {
                     .put("event", it.event).put("hash", it.hash).put("prev", it.previousHash)
             )
         }
-        secureStore.write(array.toString())
+        return secureStore.write(array.toString())
     }
 
     private companion object {
