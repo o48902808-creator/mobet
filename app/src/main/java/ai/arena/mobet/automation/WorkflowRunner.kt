@@ -24,7 +24,7 @@ import android.view.accessibility.AccessibilityNodeInfo
  */
 class WorkflowRunner(
     private val service: MobetAccessibilityService,
-    private val log: (String) -> Unit,
+    private val emitLog: (String) -> Unit,
     private val onFinished: ((Boolean, String) -> Unit)? = null,
     private val launchTarget: Boolean = true,
     private val enforcePackageAtFirstStep: Boolean = false
@@ -43,6 +43,33 @@ class WorkflowRunner(
     private var lastFingerprint: String? = null
     private val screenVisits = mutableMapOf<String, Int>()
     private val healedSteps = mutableSetOf<Int>()
+
+    /**
+     * Plaintext secret values resolved during this run, held only to keep them *out* of the log.
+     *
+     * A step may legitimately carry a secret in a selector or a fill value, and failure messages
+     * quote the selector back to the user ("Timed out finding text ..."). Without this, a
+     * resolved secret would reach the diagnostics log, the audit ledger and a broadcast Intent
+     * in plaintext. Cleared when the run ends.
+     */
+    private val resolvedSecrets = mutableSetOf<String>()
+
+    /**
+     * Single chokepoint for run output. Every log line, including failure and cancellation
+     * messages, is redacted here rather than at each call site, so a future message cannot
+     * reintroduce the leak by forgetting to redact.
+     */
+    private fun log(message: String) = emitLog(redact(message))
+
+    private fun redact(message: String): String {
+        if (resolvedSecrets.isEmpty()) return message
+        var output = message
+        // Longest first, so a secret that contains another as a substring still fully redacts.
+        resolvedSecrets.sortedByDescending(String::length).forEach { secret ->
+            if (secret.isNotEmpty()) output = output.replace(secret, SECRET_MASK)
+        }
+        return output
+    }
 
     fun start(value: Workflow) {
         val violations = PlanValidator.validate(value)
@@ -71,10 +98,12 @@ class WorkflowRunner(
         cancelled = true
         awaitingConfirmation = false
         handler.removeCallbacksAndMessages(null)
-        log(reason)
+        val safe = redact(reason)
+        resolvedSecrets.clear()
+        emitLog(safe)
         if (!completionDelivered) {
             completionDelivered = true
-            onFinished?.invoke(false, reason)
+            onFinished?.invoke(false, safe)
         }
     }
 
@@ -259,6 +288,7 @@ class WorkflowRunner(
                     finish("Missing or unreadable secret: $name")
                     return null
                 }
+                if (value.isNotEmpty()) resolvedSecrets += value
                 result = result.replace(it.value, value)
             }
             return result
@@ -384,10 +414,13 @@ class WorkflowRunner(
         cancelled = true
         awaitingConfirmation = false
         handler.removeCallbacksAndMessages(null)
-        log(message)
+        // Redact before clearing, otherwise the final message loses its protection.
+        val safe = redact(message)
+        resolvedSecrets.clear()
+        emitLog(safe)
         if (!completionDelivered) {
             completionDelivered = true
-            onFinished?.invoke(message.startsWith("Completed"), message)
+            onFinished?.invoke(safe.startsWith("Completed"), safe)
         }
     }
 
@@ -405,6 +438,10 @@ class WorkflowRunner(
 
     private companion object {
         const val LOOP_GUARD_SLACK = 8
+
+        /** Stand-in for a resolved secret value in any user-visible or persisted text. */
+        const val SECRET_MASK = "[redacted secret]"
+
 
         /** Minimum settle time after switching apps, so the new window is attached. */
         const val LAUNCH_SETTLE_MS = 900L

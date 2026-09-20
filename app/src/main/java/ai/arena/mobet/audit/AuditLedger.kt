@@ -21,6 +21,10 @@ data class LedgerEntry(
  * forming a local blockchain-style chain. [verify] recomputes the chain and reports the first
  * broken link, so any after-the-fact edit of the history is detectable. The ledger is bounded,
  * stays entirely on-device, and stores runner status text only — never screen content or secrets.
+ *
+ * That last guarantee is enforced upstream: [ai.arena.mobet.automation.WorkflowRunner] masks
+ * every resolved `{{secret:…}}` value before a line is emitted, because failure messages quote
+ * the selector that failed and a selector may legitimately hold a secret.
  */
 class AuditLedger(context: Context) {
     private val secureStore = EncryptedStateStore(context, "audit_ledger_v2")

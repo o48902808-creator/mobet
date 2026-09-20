@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.core.content.FileProvider
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 
 /**
@@ -152,27 +153,49 @@ object WorkflowTransfer {
     fun commit(context: Context, workflows: List<ImportedWorkflow>): Int {
         val library = context.getSharedPreferences(LIBRARY, Context.MODE_PRIVATE)
         val editor = library.edit()
+        // Names already taken. Seeded from the library, then extended as the batch is staged:
+        // editor writes are not visible to library.contains() until apply(), so a bundle
+        // containing two workflows with the same name would otherwise assign both the same
+        // key and silently keep only the last one while reporting that both were imported.
+        val taken = library.all.keys.toMutableSet()
         var written = 0
         workflows.filter(ImportedWorkflow::valid).forEach { entry ->
             var name = entry.name
             var suffix = 2
-            while (library.contains(name)) {
+            while (!taken.add(name)) {
                 name = "${entry.name} ($suffix)"
                 suffix++
             }
             editor.putString(name, entry.source)
             written++
         }
-        editor.apply()
+        // commit() rather than apply(): the caller reports "Imported N" immediately, and an
+        // import the user was told succeeded must be on disk before that claim is made.
+        editor.commit()
         return written
     }
 
+    /**
+     * Reads a user-picked file, refusing anything over [MAX_BYTES].
+     *
+     * The cap is enforced *while* reading rather than after. A content:// URI can be backed by
+     * an arbitrarily large — or endless — provider stream, so reading it fully and then checking
+     * the size would let a hostile or simply wrong pick exhaust memory before the check ran.
+     */
     fun readUri(context: Context, uri: Uri): Result<String> = runCatching {
         context.contentResolver.openInputStream(uri).use { stream ->
             requireNotNull(stream) { "Could not open the selected file" }
-            val bytes = stream.readBytes()
-            require(bytes.size <= MAX_BYTES) { "File is larger than ${MAX_BYTES / 1024} KB" }
-            String(bytes, Charsets.UTF_8)
+            val buffer = ByteArrayOutputStream()
+            val chunk = ByteArray(16 * 1024)
+            while (true) {
+                val read = stream.read(chunk)
+                if (read <= 0) break
+                require(buffer.size() + read <= MAX_BYTES) {
+                    "File is larger than ${MAX_BYTES / 1024} KB"
+                }
+                buffer.write(chunk, 0, read)
+            }
+            buffer.toString(Charsets.UTF_8.name())
         }
     }
 
