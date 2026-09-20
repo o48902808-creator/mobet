@@ -82,6 +82,7 @@ android {
         versionName = "0.7.0"
         // The whole icon set is vector drawables; no raster assets are shipped.
         vectorDrawables.useSupportLibrary = true
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildFeatures { buildConfig = true }
@@ -183,4 +184,9 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // Real org.json implementation for JVM unit tests (the android.jar version is stubbed).
     testImplementation("org.json:json:20240303")
+
+    // On-device tests: the Android Keystore boundary (SecretStore, EncryptedStateStore) and
+    // encrypted persistence (AuditLedger) cannot be meaningfully simulated on the JVM.
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }
