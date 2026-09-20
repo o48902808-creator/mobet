@@ -176,12 +176,14 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # API 31 covers both sides of Keystore behaviour changes without the newest-image boot
-      # cost; the tests only need a working AndroidKeyStore, not a flagship screen size.
-      - name: Run instrumented tests (API 31)
+      # API 29 boots fast on the runner and still exercises a real AndroidKeyStore (GMS or not),
+      # which is the only thing these tests need. No named profile — the default phone AVD is
+      # the boot-reliable one on this action.
+      - name: Run instrumented tests (API 29)
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 31
+          api-level: 29
           arch: x86_64
-          profile: pixel_6
+          heap-size: 1024M
+          emulator-boot-timeout: 900
           script: gradle --no-daemon connectedDebugAndroidTest --stacktrace
