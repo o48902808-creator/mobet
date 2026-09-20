@@ -180,10 +180,45 @@ jobs:
       # which is the only thing these tests need. No named profile — the default phone AVD is
       # the boot-reliable one on this action.
       - name: Run instrumented tests (API 29)
+        id: device
         uses: reactivecircus/android-emulator-runner@v2
+        continue-on-error: true
         with:
           api-level: 29
           arch: x86_64
           heap-size: 1024M
           emulator-boot-timeout: 900
-          script: gradle --no-daemon connectedDebugAndroidTest --stacktrace
+          script: gradle --no-daemon connectedDebugAndroidTest --stacktrace 2>&1 | tee /tmp/connected.log
+
+      # Job logs are not always retrievable, so failures must surface as annotations the same
+      # way the JVM job already does them: per-test results from the connected-test XML, and a
+      # build-error excerpt when compilation (androidTest sourceset) is what failed.
+      - name: Report device test failures
+        if: steps.device.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          import glob, re, xml.etree.ElementTree as ET
+          found = False
+          for path in glob.glob('app/build/outputs/androidTest-results/connected/*.xml') + \
+                        glob.glob('app/build/outputs/androidTest-results/**/*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in list(case.findall('failure')) + list(case.findall('error')):
+                      found = True
+                      name = f"{case.get('classname')}.{case.get('name')}"
+                      text = (bad.get('message') or bad.text or 'test failed')[:900]
+                      text = text.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+                      print(f'::error title=Device test failed {name}::{text}')
+          if not found:
+              try:
+                  log = open('/tmp/connected.log', errors='replace').read()
+              except OSError:
+                  log = ''
+              lines = [l for l in log.splitlines()
+                       if re.search(r'^e: |error:|FAILURE:|Caused by:|Could not |Unresolved reference|What went wrong', l)]
+              if lines:
+                  for l in lines[:40]:
+                      print(f'::error title=Device build error::{l.strip()[:900].replace("%", "%25")}')
+              else:
+                  print('::error title=Device failure::connectedDebugAndroidTest failed; no XML or error lines found.')
+          raise SystemExit(1)
+          PY
