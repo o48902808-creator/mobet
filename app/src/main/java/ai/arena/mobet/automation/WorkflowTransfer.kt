@@ -171,8 +171,9 @@ object WorkflowTransfer {
         }
         // commit() rather than apply(): the caller reports "Imported N" immediately, and an
         // import the user was told succeeded must be on disk before that claim is made.
-        editor.commit()
-        return written
+        // Likewise, if the disk said no, the report must say 0 — reporting `written` imports
+        // that never persisted would silently lose the bundle the user just picked.
+        return if (editor.commit()) written else 0
     }
 
     /**

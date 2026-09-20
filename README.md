@@ -77,7 +77,7 @@ the order the features were built.
 - Scroll, wait, delay, Back, and Home actions
 - Per-step polling, bounded retries, timeout, status, Stop, and fail-fast handling
 - Variables and conditional `ifText` / `unlessText` execution
-- AES-GCM secrets protected by a non-exportable Android Keystore key
+- AES-GCM secrets protected by a non-exportable Android Keystore key, name-bound so ciphertexts cannot be swapped between entries
 - Blocking, user-visible confirmation steps for consequential actions
 - Editable workflow JSON stored locally on the device
 - Named local workflow library with Save and Load

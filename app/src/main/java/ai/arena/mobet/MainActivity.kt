@@ -76,6 +76,14 @@ class MainActivity : AppCompatActivity() {
     private var highlighting = false
 
     /**
+     * Package of the app a recording was started in, kept so the import can write it into the
+     * workflow. Without it the recorded steps would land in a document whose `package` (and
+     * `policy.allowedPackages`) still points at whatever was there before, and the freshly
+     * recorded workflow would be rejected until hand-edited.
+     */
+    private var recordingPackage: String? = null
+
+    /**
      * Debounce for the live summary chips.
      *
      * Highlighting stays synchronous because it is direct visual feedback on the character just
@@ -1285,11 +1293,13 @@ class MainActivity : AppCompatActivity() {
             rows = apps.map { appRow(it) }
         ) { index ->
             val app = apps[index]
-            service.startRecording()
-            if (!service.launchTarget(app.packageName)) {
-                showStatus("Could not launch ${app.label}", Tone.DANGER)
-            } else {
+            recordingPackage = if (service.launchTarget(app.packageName)) {
+                service.startRecording()
                 showStatus("Recording in ${app.label} — return and tap Stop to import", Tone.SUCCESS)
+                app.packageName
+            } else {
+                showStatus("Could not launch ${app.label}", Tone.DANGER)
+                null
             }
         }
     }
@@ -1297,6 +1307,8 @@ class MainActivity : AppCompatActivity() {
     private fun importRecordedSteps(source: String) {
         try {
             val recorded = JSONArray(source)
+            val target = recordingPackage
+            recordingPackage = null
             if (recorded.length() == 0) {
                 showStatus("Stopped. No recorded taps to import")
                 return
@@ -1304,8 +1316,25 @@ class MainActivity : AppCompatActivity() {
             val root = JSONObject(editor.text.toString())
             val steps = root.optJSONArray("steps") ?: JSONArray().also { root.put("steps", it) }
             for (i in 0 until recorded.length()) steps.put(recorded.getJSONObject(i))
+            // Point the workflow at the app the recording was captured in: set the target when
+            // the document does not already name one, and always widen the package allowlist.
+            if (target != null) {
+                if (root.optString("package").isBlank()) root.put("package", target)
+                val policy = root.optJSONObject("policy") ?: JSONObject().also { root.put("policy", it) }
+                val allowed = policy.optJSONArray("allowedPackages")
+                    ?: JSONArray().also { policy.put("allowedPackages", it) }
+                var alreadyAllowed = false
+                for (i in 0 until allowed.length()) {
+                    if (allowed.getString(i) == target) { alreadyAllowed = true; break }
+                }
+                if (!alreadyAllowed) allowed.put(target)
+            }
             editor.setText(root.toString(2))
-            showStatus("Imported ${recorded.length()} recorded steps", Tone.SUCCESS)
+            showStatus(
+                "Imported ${recorded.length()} recorded steps" +
+                    if (target != null) " — target allowlist includes $target" else "",
+                Tone.SUCCESS
+            )
         } catch (error: Exception) {
             showStatus("Could not import recording: ${error.message}", Tone.DANGER)
         }

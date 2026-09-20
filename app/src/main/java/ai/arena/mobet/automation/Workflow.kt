@@ -45,10 +45,20 @@ data class Workflow(
         fun parse(source: String): Workflow {
             val root = JSONObject(source)
             val variablesObject = root.optJSONObject("variables") ?: JSONObject()
+            require(variablesObject.length() <= MAX_VARIABLES) {
+                "Workflow has ${variablesObject.length()} variables; the limit is $MAX_VARIABLES"
+            }
             val variables = buildMap {
                 variablesObject.keys().forEach { key -> put(key, variablesObject.getString(key)) }
             }
             val items = root.getJSONArray("steps")
+            // Bound before materializing: the editor re-parses the whole document on every
+            // keystroke to refresh its summary chips, and policy.maxActions caps execution at
+            // 200 anyway, so a larger document can never run — it could only make the main
+            // thread grind. Fail the parse early with a clear message instead.
+            require(items.length() <= MAX_STEPS) {
+                "Workflow has ${items.length()} steps; the limit is $MAX_STEPS"
+            }
             val steps = buildList {
                 for (i in 0 until items.length()) {
                     val item = items.getJSONObject(i)
@@ -110,5 +120,9 @@ data class Workflow(
             val array = objectValue.optJSONArray(key) ?: return fallback
             return buildSet { for (i in 0 until array.length()) add(array.getString(i)) }
         }
+
+        /** Hard parse-time bounds; see the comments at their enforcement points. */
+        const val MAX_STEPS = 200
+        const val MAX_VARIABLES = 100
     }
 }

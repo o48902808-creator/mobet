@@ -183,6 +183,19 @@ class WorkflowRunner(
                 val nextRisk = flow.steps.getOrNull(index + 1)?.let { riskOf(it, flow.variables) }
                 val hardened = nextRisk != null && nextRisk.tier == RiskTier.CRITICAL
                 if (hardened) log("Critical next step — typed confirmation required")
+                // Fail closed if no answer ever arrives. The prompt lives in MainActivity, so a
+                // rotation or process death can destroy the (non-cancelable) dialog without an
+                // answer; awaitingConfirmation would otherwise pin this run in "Waiting for
+                // confirmation" forever, with the runtime budget powerless because it is only
+                // checked between steps. An unanswered gate expires into a denial.
+                handler.postDelayed(
+                    {
+                        if (awaitingConfirmation && !cancelled) {
+                            finish("Confirmation timed out — action denied")
+                        }
+                    },
+                    CONFIRM_TIMEOUT_MS
+                )
                 service.requestConfirmation(step.message ?: "Allow the next workflow action?", hardened)
             }
             "tappoint", "swipe" -> {
@@ -351,6 +364,15 @@ class WorkflowRunner(
         val started = SystemClock.uptimeMillis()
         fun attempt() {
             if (cancelled) return
+            // The runtime budget is also checked between steps in executeCurrent, but this seek
+            // loop can outlive it many times over on its own: one wait step with timeoutMs=60s
+            // and retries=10 keeps re-entering for over ten minutes, even against a 5s budget.
+            // Enforce the hard rail here as well so no step window can stretch a run past it.
+            val flow = workflow ?: return
+            if (SystemClock.uptimeMillis() - startedAt > flow.policy.maxRuntimeMs) {
+                finish("Runtime budget exceeded (${flow.policy.maxRuntimeMs} ms)")
+                return
+            }
             val node = find(service.root(), step.selector)
             if (node != null) {
                 val ok = try { action(node) } finally { node.recycle() }
@@ -486,5 +508,12 @@ class WorkflowRunner(
 
         /** Minimum settle time after switching apps, so the new window is attached. */
         const val LAUNCH_SETTLE_MS = 900L
+
+        /**
+         * How long a confirmation gate may sit unanswered before it resolves as a denial.
+         * Deliberately generous — the user may be reading the exact wording of a consequential
+         * step — but finite, so a lost dialog denies the run instead of freezing it.
+         */
+        const val CONFIRM_TIMEOUT_MS = 120_000L
     }
 }

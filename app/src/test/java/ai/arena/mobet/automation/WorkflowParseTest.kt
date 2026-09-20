@@ -58,6 +58,37 @@ class WorkflowParseTest {
         Workflow.parse("""{ "name": "demo", "package": "com.example.app", "steps": [] }""")
     }
 
+    @Test
+    fun stepCountIsBoundedAtParseTime() {
+        val steps = (1..(Workflow.MAX_STEPS + 1)).joinToString(", ") { "{ \"action\": \"delay\" }" }
+        val source = """{ "name": "demo", "package": "com.example.app", "steps": [$steps] }"""
+        val error = runCatching { Workflow.parse(source) }.exceptionOrNull()
+        assertEquals(
+            "Workflow has ${Workflow.MAX_STEPS + 1} steps; the limit is ${Workflow.MAX_STEPS}",
+            error?.message
+        )
+    }
+
+    @Test
+    fun exactlyTheStepLimitParses() {
+        val steps = (1..Workflow.MAX_STEPS).joinToString(", ") { "{ \"action\": \"delay\" }" }
+        val flow = Workflow.parse(
+            """{ "name": "demo", "package": "com.example.app", "policy": { "maxActions": ${Workflow.MAX_STEPS} }, "steps": [$steps] }"""
+        )
+        assertEquals(Workflow.MAX_STEPS, flow.steps.size)
+    }
+
+    @Test
+    fun variableCountIsBoundedAtParseTime() {
+        val variables = (1..(Workflow.MAX_VARIABLES + 1)).joinToString(", ") { "\"v$it\": \"x\"" }
+        val source = """{ "name": "demo", "package": "com.example.app", "variables": { $variables }, "steps": [ { "action": "delay" } ] }"""
+        val error = runCatching { Workflow.parse(source) }.exceptionOrNull()
+        assertEquals(
+            "Workflow has ${Workflow.MAX_VARIABLES + 1} variables; the limit is ${Workflow.MAX_VARIABLES}",
+            error?.message
+        )
+    }
+
     companion object {
         private val AutomationPolicyDefaults =
             ai.arena.mobet.policy.AutomationPolicy.DEFAULT_ACTIONS
