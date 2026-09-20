@@ -53,6 +53,75 @@ object RunReminder {
         }
     }
 
+    /**
+     * Reconciles the stored schedule after a reboot. AlarmManager drops every pending alarm
+     * when the device powers off while the records in PREFS survive, so without this receiver
+     * a "9am tomorrow" reminder would silently never fire — the schedule UI would keep
+     * listing it, but nothing was armed to deliver it.
+     *
+     * Like every path in this file it only posts notifications; it never starts a workflow.
+     * That is the entire reason Mobet declares RECEIVE_BOOT_COMPLETED.
+     */
+    class BootReceiver : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val entries = prefs.all
+                .mapNotNull { (name, value) -> (value as? Long)?.let { name to it } }
+                .toMap()
+            if (entries.isEmpty()) return
+            val live = context.getSharedPreferences("library", Context.MODE_PRIVATE).all.keys
+            val plan = reschedulePlan(System.currentTimeMillis(), entries, live)
+            // Still in the future: re-arm the same alarm. schedule() also rewrites the record.
+            plan.rearm.forEach { name ->
+                if (!schedule(context, name, entries.getValue(name))) {
+                    // The system rejected the alarm; do not leave a phantom schedule behind.
+                    prefs.edit().remove(name).apply()
+                }
+            }
+            // Its time passed while the device was off: post the reminder at boot instead of
+            // dropping it silently. One-shot, matching Receiver, so the record is consumed.
+            plan.missed.forEach { name ->
+                notify(context, name)
+                prefs.edit().remove(name).apply()
+            }
+            // The workflow was deleted after scheduling; the record is useless.
+            plan.dropped.forEach { name -> prefs.edit().remove(name).apply() }
+        }
+    }
+
+    /** The reconciliation a boot restore performs, grouped by outcome. */
+    data class BootReschedulePlan(
+        val rearm: List<String>,
+        val missed: List<String>,
+        val dropped: List<String>
+    )
+
+    /**
+     * Pure decision behind [BootReceiver], split out so the reconciliation is covered by JVM
+     * tests without an AlarmManager. Stored triggers fall into three groups, each sorted for
+     * a deterministic result: future ones to re-arm, ones missed while powered off (including
+     * a trigger at exactly `now`, whose alarm can no longer fire on its own) to post at boot,
+     * and ones whose workflow no longer exists to forget.
+     */
+    fun reschedulePlan(
+        now: Long,
+        entries: Map<String, Long>,
+        liveWorkflows: Set<String>
+    ): BootReschedulePlan {
+        val rearm = mutableListOf<String>()
+        val missed = mutableListOf<String>()
+        val dropped = mutableListOf<String>()
+        entries.forEach { (name, triggerAt) ->
+            when {
+                name !in liveWorkflows -> dropped += name
+                triggerAt > now -> rearm += name
+                else -> missed += name
+            }
+        }
+        return BootReschedulePlan(rearm.sorted(), missed.sorted(), dropped.sorted())
+    }
+
     private fun notify(context: Context, name: String) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         if (Build.VERSION.SDK_INT >= 26) {

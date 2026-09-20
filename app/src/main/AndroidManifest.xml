@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- AlarmManager drops scheduled alarms at power-off. Without this, a stored run reminder
+         would silently never fire after the phone restarts. The boot receiver below only
+         re-arms alarms and posts reminder notifications; it cannot start a workflow. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!--
       ML Kit's bundled text-recognition model pulls in com.google.android.datatransport
@@ -50,6 +54,18 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="ai.arena.mobet.REMINDER_FIRE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Restores pending reminders after a reboot: re-arms alarms still in the future and
+             posts any reminder whose time passed while the device was off. BOOT_COMPLETED is a
+             protected broadcast only the system can send; exported=false also blocks spoofed
+             explicit intents. Never starts a workflow (docs/THREAT_MODEL.md). -->
+        <receiver
+            android:name=".automation.RunReminder$BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
 

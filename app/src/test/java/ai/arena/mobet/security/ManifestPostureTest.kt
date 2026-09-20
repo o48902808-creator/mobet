@@ -71,13 +71,19 @@ class ManifestPostureTest {
     }
 
     @Test
-    fun declaresOnlyTheNotificationPermission() {
+    fun declaresOnlyTheExpectedPermissions() {
         // Catches a *new* permission of any kind, including ones not yet on the forbidden list.
+        // The full set today: POST_NOTIFICATIONS (run reminders + the active-run indicator) and
+        // RECEIVE_BOOT_COMPLETED (re-arming those reminders after a reboot — see
+        // RunReminder.BootReceiver, which can only post notifications, never start a workflow).
         val declared = permissionEntries().filter { !it.second }.map { it.first }
         assertEquals(
             "Mobet's permission set changed. Every permission is a capability an accessibility " +
                 "service can abuse; justify it in the threat model before adding it here.",
-            listOf("android.permission.POST_NOTIFICATIONS"),
+            listOf(
+                "android.permission.POST_NOTIFICATIONS",
+                "android.permission.RECEIVE_BOOT_COMPLETED"
+            ),
             declared
         )
     }
@@ -142,6 +148,20 @@ class ManifestPostureTest {
             .substringBefore("</receiver>")
         assertTrue(
             "The reminder receiver must not be exported.",
+            receiver.contains("android:exported=\"false\"")
+        )
+    }
+
+    @Test
+    fun bootReceiverIsNotExported() {
+        // BOOT_COMPLETED is a protected broadcast only the system can send, and the system can
+        // still deliver it to a non-exported receiver. exported=false adds nothing for the
+        // system path but blocks a malicious app from invoking the receiver with a spoofed
+        // explicit intent to deliver reminders out of schedule.
+        val receiver = manifest.substringAfter(".automation.RunReminder\$BootReceiver")
+            .substringBefore("</receiver>")
+        assertTrue(
+            "The boot receiver must not be exported.",
             receiver.contains("android:exported=\"false\"")
         )
     }

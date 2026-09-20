@@ -246,7 +246,9 @@ Mobet can remind you to start a saved workflow at a chosen time (library › **R
 it will not run one by itself. Unattended execution is intentionally unsupported: with nobody
 present, a confirmation prompt cannot be answered, a mis-grounded selector cannot be caught,
 and Stop cannot be pressed. The reminder posts a notification that opens Mobet with the
-workflow loaded — you still press **Run**.
+workflow loaded — you still press **Run**. Reminders survive reboots: a boot receiver re-arms
+the stored alarms, and a reminder whose time passed while the device was off is posted at boot
+rather than silently dropped.
 
 Real scheduled execution has been proposed; it can only proceed under the constraints in
 [docs/SCHEDULED_RUNS_REVIEW.md](docs/SCHEDULED_RUNS_REVIEW.md), which requires per-workflow
