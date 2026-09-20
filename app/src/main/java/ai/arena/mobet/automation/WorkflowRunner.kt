@@ -4,6 +4,7 @@ import ai.arena.mobet.agent.ScreenFingerprint
 import ai.arena.mobet.agent.SelectorResolver
 import ai.arena.mobet.agent.WorldModel
 import ai.arena.mobet.policy.PlanValidator
+import ai.arena.mobet.policy.RiskAssessment
 import ai.arena.mobet.policy.RiskEngine
 import ai.arena.mobet.policy.RiskTier
 import ai.arena.mobet.security.SecretStore
@@ -81,7 +82,7 @@ class WorkflowRunner(
         }
         workflow = value
         startedAt = SystemClock.uptimeMillis()
-        val elevated = value.steps.count { RiskEngine.assess(it).tier >= RiskTier.ELEVATED }
+        val elevated = value.steps.count { riskOf(it, value.variables).tier >= RiskTier.ELEVATED }
         log(
             "Policy approved “${value.name}” (${value.steps.size}/${value.policy.maxActions} actions, " +
                 "$elevated elevated-risk, self-healing ${if (value.policy.allowSelfHealing) "on" else "off"})"
@@ -179,7 +180,7 @@ class WorkflowRunner(
             "confirm" -> {
                 awaitingConfirmation = true
                 // Look ahead: a CRITICAL next step upgrades this gate to a typed confirmation.
-                val nextRisk = flow.steps.getOrNull(index + 1)?.let(RiskEngine::assess)
+                val nextRisk = flow.steps.getOrNull(index + 1)?.let { riskOf(it, flow.variables) }
                 val hardened = nextRisk != null && nextRisk.tier == RiskTier.CRITICAL
                 if (hardened) log("Critical next step — typed confirmation required")
                 service.requestConfirmation(step.message ?: "Allow the next workflow action?", hardened)
@@ -269,6 +270,46 @@ class WorkflowRunner(
             ?: step.selector.description?.let { ":$it" }
             ?: ""
         )
+
+    /**
+     * Risk of a step as it will actually execute, for the confirmation look-ahead.
+     *
+     * The look-ahead used to score the *raw* step, but execution scores the *expanded* one. A
+     * step whose selector is `{{var:label}}` therefore looked like a bare tap (LOW) when the
+     * preceding confirm decided whether to harden, even though `label` resolved to "Pay $500
+     * now" (CRITICAL). The gate meant to protect the riskiest actions was weakest exactly when
+     * the risky text arrived through a variable.
+     *
+     * This substitutes variables only, and never calls [expand], which aborts the run on a
+     * missing name and would otherwise fire those side effects one step early. Secret
+     * placeholders are deliberately left unresolved: reading a secret to score a step the user
+     * has not yet approved is not worth the exposure, and a secret's *value* is not the signal
+     * risk scoring looks for. Substitution failures leave the placeholder in place, which can
+     * only under-resolve, never invent a lower score than the raw step would have produced.
+     */
+    private fun riskOf(step: Step, variables: Map<String, String>): RiskAssessment {
+        fun substitute(source: String?): String? {
+            if (source == null) return null
+            var result: String = source
+            Regex("\\{\\{var:([A-Za-z0-9_.-]+)}}").findAll(source).forEach { match ->
+                variables[match.groupValues[1]]?.let { result = result.replace(match.value, it) }
+            }
+            return result
+        }
+        val previewed = step.copy(
+            selector = Selector(
+                substitute(step.selector.text),
+                substitute(step.selector.viewId),
+                substitute(step.selector.description)
+            ),
+            value = substitute(step.value),
+            message = substitute(step.message)
+        )
+        // Take the worse of the two readings so a substitution can only ever raise the tier.
+        val raw = RiskEngine.assess(step)
+        val resolved = RiskEngine.assess(previewed)
+        return if (resolved.score >= raw.score) resolved else raw
+    }
 
     private fun expand(step: Step, variables: Map<String, String>): Step? {
         fun resolve(source: String?): String? {
