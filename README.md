@@ -323,7 +323,14 @@ Security posture is asserted rather than assumed: `ManifestPostureTest` locks th
 gradle test                            # run the JVM unit suite
 gradle verifyDebugNoNetworkPermission  # assert the merged manifest has no network access
 gradle assembleDebug                   # build the debug APK (depends on the check above)
+gradle connectedDebugAndroidTest       # on-device tests (SecretStore/Keystore, ledger persistence)
 ```
+
+On-device tests (`app/src/androidTest/`) cover what a JVM cannot: the Android Keystore
+boundary — `SecretStore` round-trips, corrupted payloads failing closed, and ciphertexts
+swapped between names being rejected via name-bound AAD — plus encrypted audit-ledger
+persistence and clear-without-tamper-alarm. The workflow's **Connected device tests** job
+runs them on an API 29 emulator on every push.
 
 GitHub Actions (`.github/workflows/android-ci.yml`) runs both on every push and pull request and uploads test reports plus the debug APK as artifacts.
 
