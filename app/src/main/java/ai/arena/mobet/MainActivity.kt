@@ -697,15 +697,36 @@ class MainActivity : AppCompatActivity() {
     private fun manageSecrets() {
         val store = SecretStore(this)
         val names = store.names()
+        // Flag secrets whose Keystore key no longer decrypts them. Listing an unreadable secret
+        // as if it were fine sends the user hunting through their workflow when the real fix is
+        // to re-enter the value.
+        val unreadable = names.filterNot(store::isReadable).toSet()
         val rows = buildList {
             add(Row("Add or replace a secret", "Encrypted with an Android Keystore key",
                 R.drawable.ic_secret))
-            names.forEach { add(Row(it, "Tap to delete", R.drawable.ic_delete)) }
+            names.forEach { name ->
+                val broken = name in unreadable
+                add(
+                    Row(
+                        title = name,
+                        subtitle = if (broken)
+                            "Unreadable \u2014 the encryption key changed. Re-add it to fix, or tap to delete"
+                        else "Tap to delete",
+                        icon = if (broken) R.drawable.ic_warning else R.drawable.ic_delete,
+                        badgeColor = if (broken)
+                            ContextCompat.getColor(this@MainActivity, R.color.mobet_danger) else null
+                    )
+                )
+            }
         }
         MobetUi.picker(
             activity = this,
             title = "Encrypted secrets",
-            subtitle = if (names.isEmpty()) "No secrets stored yet" else "${names.size} stored",
+            subtitle = when {
+                names.isEmpty() -> "No secrets stored yet"
+                unreadable.isEmpty() -> "${names.size} stored"
+                else -> "${names.size} stored \u00B7 ${unreadable.size} unreadable"
+            },
             icon = R.drawable.ic_secret,
             rows = rows
         ) { index ->

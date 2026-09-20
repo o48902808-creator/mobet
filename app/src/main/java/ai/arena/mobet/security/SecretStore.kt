@@ -16,6 +16,19 @@ class SecretStore(context: Context) {
 
     fun names(): List<String> = preferences.all.keys.sorted()
 
+    /**
+     * Whether a stored secret can still be decrypted.
+     *
+     * The AES key lives in the Android Keystore and is device-bound. It can be invalidated
+     * outside the app's control -- a lock-screen change on some OEMs, a restore to new hardware,
+     * keystore corruption -- which leaves the ciphertext permanently unreadable while the
+     * plaintext preference *key* survives. Without this check the secret still appears in the
+     * list as if it were fine, and every run that references it fails with a message that points
+     * at the run rather than at the secret. Re-entering the value is the only fix, so the UI has
+     * to be able to say so.
+     */
+    fun isReadable(name: String): Boolean = get(name) != null
+
     fun put(name: String, value: String) {
         require(name.matches(Regex("[A-Za-z0-9_.-]{1,64}"))) { "Invalid secret name" }
         val cipher = Cipher.getInstance(TRANSFORMATION)
