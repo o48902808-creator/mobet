@@ -40,6 +40,14 @@ class WorkflowRunner(
     private var index = 0
     private var awaitingConfirmation = false
     private var nextActionApproved = false
+    /**
+     * Per-gate generation for the confirmation timeout. Without it, the timer posted for one
+     * `confirm` step measures silence across *later* gates too: workflows legitimately chain
+     * confirmations (a confirm before every elevated step), so gate N could be sitting open,
+     * answered slowly, while gate N-1's two-minute deadline fires and denies a prompt the user
+     * is actively reading. Each gate gets its own deadline.
+     */
+    private var confirmationGeneration = 0
     private var startedAt = 0L
     private var lastFingerprint: String? = null
     private val screenVisits = mutableMapOf<String, Int>()
@@ -111,6 +119,8 @@ class WorkflowRunner(
     fun confirmationResult(approved: Boolean) {
         if (!awaitingConfirmation || cancelled) return
         awaitingConfirmation = false
+        // Invalidate this gate's timeout so only the *next* gate's timer is live.
+        confirmationGeneration++
         if (approved) {
             log("Confirmation approved")
             nextActionApproved = true
@@ -188,9 +198,10 @@ class WorkflowRunner(
                 // answer; awaitingConfirmation would otherwise pin this run in "Waiting for
                 // confirmation" forever, with the runtime budget powerless because it is only
                 // checked between steps. An unanswered gate expires into a denial.
+                val generation = ++confirmationGeneration
                 handler.postDelayed(
                     {
-                        if (awaitingConfirmation && !cancelled) {
+                        if (awaitingConfirmation && confirmationGeneration == generation && !cancelled) {
                             finish("Confirmation timed out — action denied")
                         }
                     },

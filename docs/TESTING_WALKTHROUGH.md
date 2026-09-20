@@ -114,6 +114,10 @@ Mobet's core safety property. A run must stop dead when you refuse it.
       it. Denial is a real stop, not a pause.
     - The Activity log and the **Audit ledger** (Inspect & verify) each record the
       denial.
+    - The gate also fails closed on its own: leave a prompt unanswered for two
+      minutes (or rotate the phone while it is open, which destroys the dialog) and
+      the run finishes with **“Confirmation timed out — action denied”** — it can
+      never hang in “Waiting for confirmation”.
 17. Run the same workflow again, and this time tap **Approve** at the same prompt.
     Verify the runner presses Back, the workflow completes, and the log reports
     success.

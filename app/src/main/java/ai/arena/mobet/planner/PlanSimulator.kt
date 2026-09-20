@@ -1,6 +1,7 @@
 package ai.arena.mobet.planner
 
 import ai.arena.mobet.agent.FuzzyText
+import ai.arena.mobet.automation.FillValueMask
 import ai.arena.mobet.automation.ScreenSnapshot
 import ai.arena.mobet.automation.Selector
 import ai.arena.mobet.automation.Workflow
@@ -86,8 +87,7 @@ object PlanSimulator {
     }
 
     /** Secrets/variables must never appear in a report; placeholders are shown verbatim. */
-    private fun maskValue(value: String): String =
-        if (value.contains("{{")) value else "•".repeat(value.length.coerceAtMost(8))
+    private fun maskValue(value: String): String = FillValueMask.mask(value)
 
     private fun grade(selector: Selector, snapshot: ScreenSnapshot): String? {
         val target = selector.text ?: selector.description

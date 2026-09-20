@@ -251,7 +251,10 @@ class LiveAndroidAgent(
     }
 
     private fun goalReached(successFact: String, facts: Set<String>): Boolean {
-        val expected = successFact.trim().lowercase()
+        // Facts are stored through AccessibilityObservationAdapter.normalize, which collapses
+        // whitespace runs; a goal typed with double spaces or a line break must compare equal
+        // to the same words with normal spacing, or completion could never be observed.
+        val expected = successFact.trim().lowercase().replace(Regex("\\s+"), " ")
         return facts.any { it.lowercase() == expected || it.lowercase() == "text:$expected" }
     }
     private fun finish(status: AgentStatus, detail: String) {

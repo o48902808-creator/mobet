@@ -1364,7 +1364,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         service.stopRun()
-        importRecordedSteps(service.stopRecording())
+        // Only import when a capture was actually running; otherwise every plain Stop
+        // surfaced a confusing "No recorded taps to import" message.
+        if (service.isRecording()) importRecordedSteps(service.stopRecording())
     }
 
     /** Nudges the user to the one setting that unblocks everything else. */

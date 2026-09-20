@@ -102,6 +102,9 @@ class MobetAccessibilityService : AccessibilityService() {
         return result
     }
 
+    /** Whether a capture is in progress — lets the UI skip the import step on a plain Stop. */
+    fun isRecording(): Boolean = recorder.active
+
     fun launchTarget(packageName: String): Boolean = launch(packageName)
 
     fun requestConfirmation(message: String, hardened: Boolean = false) {
