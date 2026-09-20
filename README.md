@@ -2,7 +2,7 @@
 
 Mobet is an Android-first, on-device mobile automation prototype. It uses Android's Accessibility API to locate controls and run explicit JSON workflows that the phone owner starts.
 
-## Frontier capabilities (v0.6.0)
+## Frontier capabilities (v0.7.0)
 
 - **Device-reliability layer** — autonomous decisions require structurally settled observation quorums with strict sample deadlines. Resource governance blocks new operations under severe thermal pressure or critically low battery, while generation-scoped callbacks eliminate lifecycle races.
 - **Executable hierarchy and probabilistic planning** — subgoals now run through an explicit state machine whose preconditions and completion evidence advance only after observed transitions. Bayesian learned-route reliability, bounded beam-style lookahead, reversible-action utility, and local replanning cooperate under hard budgets.
@@ -104,6 +104,27 @@ the order the features were built.
 No data is sent off-device. This build does not include a network permission. See the explicit [threat model](docs/THREAT_MODEL.md) for enforced invariants and residual risks.
 
 ## Build and install
+
+### Install the prebuilt APK (no build tools needed)
+
+Download the latest release APK:
+
+https://github.com/o48902808-creator/mobet/releases/latest/download/mobet.apk
+
+The release workflow (`.github/workflows/release.yml`) builds `gradle test
+assembleDebug` and ships `app-debug.apk` as `mobet.apk`, so the release is signed with
+the standard Android debug key. **No keystore, signing key, or `MOBET_*` GitHub
+secrets are needed to build or publish it** — the optional `MOBET_KEYSTORE_*`
+environment variables in `app/build.gradle.kts` only affect local `assembleRelease`
+builds, which the release workflow never invokes.
+
+All builds use the debug key, but an in-place update can still fail with a
+signature-mismatch error (notably between APKs built on different machines). If the
+installer refuses the update, **uninstall the old Mobet first** — this clears its
+saved workflows, secrets, captures, and audit ledger — then install the downloaded
+APK.
+
+### Build from source
 
 Prerequisites: Android Studio Ladybug or newer, Android SDK 35, and JDK 17.
 
