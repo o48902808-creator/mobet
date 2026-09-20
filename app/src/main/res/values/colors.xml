@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light palette (default). A matching dark palette lives in values-night/colors.xml. -->
+    <color name="mobet_primary">#4A4BD6</color>
+    <color name="mobet_on_primary">#FFFFFF</color>
+    <color name="mobet_primary_container">#E2E1FF</color>
+    <color name="mobet_on_primary_container">#151466</color>
+
+    <color name="mobet_secondary">#00696E</color>
+    <color name="mobet_on_secondary">#FFFFFF</color>
+    <color name="mobet_secondary_container">#9FF1F5</color>
+    <color name="mobet_on_secondary_container">#002022</color>
+
+    <color name="mobet_background">#F7F7FC</color>
+    <color name="mobet_on_background">#12131A</color>
+    <color name="mobet_surface">#FFFFFF</color>
+    <color name="mobet_on_surface">#12131A</color>
+    <color name="mobet_surface_variant">#E6E5F0</color>
+    <color name="mobet_on_surface_variant">#494857</color>
+    <color name="mobet_surface_container">#F1F0F9</color>
+    <color name="mobet_outline">#C6C5D4</color>
+
+    <color name="mobet_error">#B3261E</color>
+    <color name="mobet_on_error">#FFFFFF</color>
+
+    <!-- Semantic status colours used by code and drawables. -->
+    <color name="mobet_success">#0E7A4F</color>
+    <color name="mobet_warning">#8A5A00</color>
+    <color name="mobet_danger">#B3261E</color>
+    <color name="mobet_code_background">#F2F1FA</color>
+    <color name="mobet_code_text">#22222E</color>
+    <color name="mobet_scrim">#66000000</color>
+    <color name="mobet_danger_container">#FFDAD6</color>
+    <color name="mobet_warning_container">#FFF0D2</color>
+    <!-- JSON editor syntax colours (light). -->
+    <color name="mobet_json_key">#1F4FD8</color>
+    <color name="mobet_json_string">#0B7A5A</color>
+    <color name="mobet_json_number">#9A4B00</color>
+    <color name="mobet_json_literal">#8A2BBE</color>
+    <color name="mobet_json_punctuation">#6B6B7B</color>
+</resources>

@@ -34,6 +34,40 @@ Mobet is an Android-first, on-device mobile automation prototype. It uses Androi
 - **Risk-aware goal compiler** — the offline planner now shares the exact same `RiskEngine` as the runner, inserts confirmations with the *reason* attached, grounds `fill` clauses only against editable elements, understands `go back` and `scroll`, and uses typo-tolerant fuzzy grounding.
 - **JVM unit test suite + CI** — deterministic components (risk engine, validator, fuzzy matcher, resolver, fingerprints, planner, simulator, parser) are covered by plain JUnit tests, run in GitHub Actions on every push alongside a debug APK build.
 
+## Interface
+
+![Mobet redesigned interface](docs/screenshots/overview.png)
+
+> The previews above are rendered from the app's own resource files (`colors.xml`,
+> `dimens.xml`, `strings.xml` and the `ic_*.xml` vector paths) so they cannot drift from what
+> the app ships. They approximate Android's layout engine rather than being emulator captures —
+> verify on a device before relying on exact metrics.
+
+Mobet's control surface is a Material 3 layout organised around the task you are doing, not
+the order the features were built.
+
+- **Service card** — the enabled/disabled state is the first thing on screen, tinted green or
+  red, with the Accessibility shortcut shown only while it is still needed. `Run workflow`
+  stays disabled until the service is connected, so the primary action can never silently fail.
+- **Workflow editor** — a monospaced JSON field with one-tap reformatting and a full-screen
+  editing mode. Summary chips parse the buffer on every keystroke and report the target
+  package, step budget, runtime budget, visual-fallback and self-healing posture, and the
+  policy verdict, so an invalid plan is visible while you type rather than at run time.
+- **Plan & autonomy / Inspect & verify** — the twelve former buttons are grouped into two
+  labelled tiles grids with icons: generate plan, bounded agent run, dry run; inspect screen,
+  diagnostics, captures, audit ledger, agent memory, validate policy.
+- **Activity log** — a timestamped, scrollable history of the last 80 events replaces the
+  single overwritten status line, so nothing is lost when a message is superseded. Important
+  messages also raise a tone-coded snackbar anchored above the run bar.
+- **Report sheets** — diagnostics, ledger, dry-run output, memory, OCR results and validation
+  results open in scrollable bottom sheets with selectable monospaced text, pass/fail banners
+  and purpose-built empty states, instead of truncated alert dialogs.
+- **Safety affordances** — the hardened `APPROVE` confirmation keeps its Confirm button
+  disabled until the exact word is typed, and every destructive control (clear ledger, clear
+  agent memory, delete a secret or capture) is behind an explicit second confirmation.
+- Edge-to-edge insets, 48dp touch targets, content descriptions, a light/dark palette mapped
+  to Material 3 colour roles, and an in-app "How Mobet works" sheet.
+
 ## Current MVP
 
 - Launch an installed application by package name
@@ -79,6 +113,26 @@ Prerequisites: Android Studio Ladybug or newer, Android SDK 35, and JDK 17.
 4. In Mobet, tap **Open accessibility settings**, select **Mobet automation**, and enable it.
 5. Return to Mobet and run the included Settings demo.
 
+### “Restricted setting” — the Accessibility toggle is greyed out
+
+On Android 13 and newer, Accessibility access is a **restricted setting**: apps installed
+outside an app-store session (for example by tapping a downloaded APK, such as the
+`mobet-debug-apk` CI artifact) cannot be granted it until the restriction is lifted. The
+toggle appears disabled and tapping it shows a *Restricted setting* dialog. Mobet is not
+broken — the permission is gated by the system.
+
+To unlock it:
+
+1. **Settings › Apps › See all apps › Mobet** — or tap **“Toggle greyed out?”** on Mobet's
+   home screen, which deep-links there.
+2. Tap the **⋮ menu in the top-right of the App info page** (not in the Accessibility menu).
+3. Tap **Allow restricted settings** and confirm with your PIN, pattern or biometric.
+4. Return to **Settings › Accessibility › Mobet automation** and enable it.
+
+Installs performed with `adb install -r -g app-debug.apk`, or launched from Android Studio,
+are exempt from this restriction. Some OEM skins (Xiaomi/HyperOS, Samsung One UI, Realme)
+relocate or further gate the option.
+
 > The repository intentionally does not commit the generated Gradle wrapper JAR. Android Studio can sync the project directly; you can also run `gradle wrapper` with Gradle 8.9 installed.
 
 ## Workflow format
@@ -121,9 +175,62 @@ Define non-sensitive values in the root `variables` object and reference them as
 }
 ```
 
+### Finding your way around
+
+![Searchable picker and highlighted editor](docs/screenshots/phase3-ux.png)
+
+The app pickers filter as you type once a list gets long — useful when a device
+has a few hundred launchable apps — and show each app's real launcher icon, so
+you can pick by sight instead of reading package names. The workflow editor
+colours JSON as you type, and deleting a saved workflow or a builder step can be
+reversed from the snackbar. Deleting a *secret* cannot be undone, and says so:
+Mobet can't read an encrypted value back in order to restore it.
+
+## Cross-app workflows
+
+`launch` switches automation to another application, enabling workflows that span apps.
+It is the only action that can move Mobet outside the current package, so the destination
+**must** also appear in `policy.allowedPackages`: `PlanValidator` rejects the plan otherwise,
+and the runner re-checks the allowlist immediately before switching.
+
+```json
+{
+  "package": "com.example.notes",
+  "policy": {
+    "allowedPackages": ["com.example.notes", "com.example.mail"],
+    "allowedActions": ["wait", "tap", "fill", "launch", "confirm"]
+  },
+  "steps": [
+    { "action": "wait", "text": "Notes" },
+    { "action": "launch", "package": "com.example.mail" },
+    { "action": "wait", "text": "Inbox", "timeoutMs": 8000 }
+  ]
+}
+```
+
+## Backing up your workflows
+
+Android backup is disabled (`allowBackup="false"`), so **uninstalling Mobet erases the entire
+workflow library** — including the uninstall that a change of APK signing key forces. Use the
+overflow menu › **Export workflows…** to write a `.json` bundle you can share or store, and
+**Import workflows…** to restore it. Imports are validated before anything is written and
+never overwrite an existing name.
+
+Secret *values* are never exported. A workflow referencing `{{secret:name}}` exports only the
+reference, so a bundle cannot leak credentials; re-enter secrets on the new device.
+
+## Reminders, not unattended runs
+
+Mobet can remind you to start a saved workflow at a chosen time (library › **Remind me**), but
+it will not run one by itself. Unattended execution is intentionally unsupported: with nobody
+present, a confirmation prompt cannot be answered, a mis-grounded selector cannot be caught,
+and Stop cannot be pressed. The reminder posts a notification that opens Mobet with the
+workflow loaded — you still press **Run**.
+
 ## Safety and platform notes
 
 - Android displays a strong warning when enabling accessibility access because this capability can read and operate screen content. Only enable services you trust.
+- **Mobet holds no network permission, and the build enforces it.** Because a screen-reading accessibility service plus network egress is an exfiltration channel, `:app:verifyDebugNoNetworkPermission` inspects the *merged* manifest and fails the build if any network permission survives — including one contributed by a dependency. ML Kit's OCR pulls in a telemetry library that declares `INTERNET`; it is stripped with `tools:node="remove"`, since on-device OCR does not need it. You can verify the claim yourself with `aapt dump permissions` on any APK.
 - Mobet runs only a workflow or bounded Apex goal explicitly started in its foreground UI and offers Stop. Sensitive actions still require blocking confirmation; remote triggers remain disabled, and optional model assistance has no execution authority.
 - Package discovery uses a least-privilege launcher `<queries>` declaration rather than `QUERY_ALL_PACKAGES`; non-launchable/private packages are intentionally outside the picker and autonomous launch boundary.
 - Secure fields, CAPTCHAs, biometrics, protected windows, and apps with poor accessibility metadata may not be automatable and should not be bypassed.
@@ -189,9 +296,12 @@ Every target must resolve confidently and uniquely against the inspected accessi
 
 JVM unit tests cover every deterministic component: `RiskEngine` tiers, `PlanValidator` rules, `FuzzyText` similarity, `SelectorResolver` healing and abstention, `ScreenFingerprint` stability, `GoalPlanner` grounding/rejection, `PlanSimulator` reports (including secret masking), and `Workflow` parsing bounds.
 
+Security posture is asserted rather than assumed: `ManifestPostureTest` locks the permission set, unexported components, and disabled backup; `VerifyNoNetworkPermission` checks the merged manifest; and `InjectionDefenceInDepthTest` proves containment holds with the injection detector deliberately bypassed, since a heuristic detector will eventually be evaded.
+
 ```bash
-gradle test            # run the JVM unit suite
-gradle assembleDebug   # build the debug APK
+gradle test                            # run the JVM unit suite
+gradle verifyDebugNoNetworkPermission  # assert the merged manifest has no network access
+gradle assembleDebug                   # build the debug APK (depends on the check above)
 ```
 
 GitHub Actions (`.github/workflows/android-ci.yml`) runs both on every push and pull request and uploads test reports plus the debug APK as artifacts.

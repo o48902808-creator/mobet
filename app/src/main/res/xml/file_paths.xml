@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Only the dedicated export staging directory is ever shared. Captures, secrets,
+         agent memory and the audit ledger stay unreachable through this provider. -->
+    <files-path name="workflow_exports" path="exports/" />
+</paths>

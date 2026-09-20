@@ -1,4 +1,76 @@
 <resources>
     <string name="app_name">Mobet</string>
     <string name="accessibility_service_description">Runs workflows you explicitly start by reading labels and operating controls on screen.</string>
+
+    <string name="app_tagline">On-device workflow runner · you stay in control</string>
+
+    <!-- Service card -->
+    <string name="service_enabled">Automation service enabled</string>
+    <string name="service_disabled">Automation service disabled</string>
+    <string name="service_enabled_detail">Mobet can read labels and operate controls in apps you target. Nothing runs until you start it.</string>
+    <string name="service_disabled_detail">Enable Mobet in Android Accessibility settings to let it run the workflows you start.</string>
+    <string name="open_accessibility_settings">Open accessibility settings</string>
+    <string name="restricted_help_link">Toggle greyed out or “Restricted setting”?</string>
+    <string name="restricted_title">Unblock restricted settings</string>
+    <string name="restricted_subtitle">Android blocks Accessibility for sideloaded apps</string>
+    <string name="restricted_open_app_info">Open Mobet app info</string>
+
+    <!-- Workflow card -->
+    <string name="section_workflow">Workflow</string>
+    <string name="workflow_json">Workflow JSON</string>
+    <string name="workflow_hint">Paste or edit a Mobet workflow…</string>
+    <string name="action_format">Format</string>
+    <string name="action_fullscreen">Full screen</string>
+    <string name="action_save">Save</string>
+    <string name="action_load">Load</string>
+    <string name="action_secrets">Secrets</string>
+    <string name="action_record">Record</string>
+    <string name="action_record_taps">Record taps and scrolls in an app</string>
+    <string name="action_choose_target">Choose target app…</string>
+    <string name="action_edit_steps">Edit steps visually</string>
+    <string name="step_move_up">Move step up</string>
+    <string name="step_move_down">Move step down</string>
+    <string name="step_delete">Delete step</string>
+
+    <!-- Planning card -->
+    <string name="section_planning">Plan &amp; autonomy</string>
+    <string name="planning_caption">Ground a goal in the screen you last visited, preview it, or let the bounded agent drive.</string>
+    <string name="action_generate_plan">Generate plan</string>
+    <string name="action_run_goal">Run goal</string>
+    <string name="action_dry_run">Dry run</string>
+
+    <!-- Tools card -->
+    <string name="section_tools">Inspect &amp; verify</string>
+    <string name="action_inspect">Inspect screen</string>
+    <string name="action_diagnostics">Diagnostics</string>
+    <string name="action_captures">Captures</string>
+    <string name="action_audit">Audit ledger</string>
+    <string name="action_agent_memory">Agent memory</string>
+    <string name="action_validate">Validate policy</string>
+
+    <!-- Activity card -->
+    <string name="section_activity">Activity</string>
+    <string name="status_ready">Ready. Enable the service, then run the included Settings demo.</string>
+
+    <!-- Run bar -->
+    <string name="action_run">Run workflow</string>
+    <string name="action_stop">Stop</string>
+    <string name="action_stop_description">Stop the active run and import anything you recorded</string>
+
+    <!-- Safety -->
+    <string name="safety_notice">Only automate apps and accounts you are authorized to use. Review every workflow before you run it.</string>
+
+    <!-- Dialogs -->
+    <string name="action_export">Export workflows…</string>
+    <string name="action_import">Import workflows…</string>
+    <string name="action_reminders">Run reminders…</string>
+    <string name="action_help">How Mobet works</string>
+    <string name="picker_search_hint">Search</string>
+    <string name="picker_no_matches">No matches</string>
+    <string name="action_undo">Undo</string>
+    <string name="action_close">Close</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_copy_selector">Copy selector</string>
 </resources>

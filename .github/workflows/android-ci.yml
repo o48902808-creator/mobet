@@ -32,7 +32,79 @@ jobs:
 
       # The repository intentionally omits the Gradle wrapper JAR; CI pins Gradle itself.
       - name: Run deterministic unit tests
-        run: gradle --no-daemon --warning-mode all test
+        id: tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          gradle --no-daemon --warning-mode all test --stacktrace 2>&1 | tee /tmp/gradle-test.log
+
+      # Compiler and Gradle configuration errors never reach the XML reports, so echo them
+      # directly as annotations. Without this a build failure is invisible wherever raw job
+      # logs cannot be downloaded.
+      - name: Report build errors
+        if: steps.tests.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          import re
+          log = open('/tmp/gradle-test.log', errors='replace').read()
+          lines = [l for l in log.splitlines()
+                   if re.search(r'^e: |error:|FAILURE:|Caused by:|Could not |Unresolved reference|What went wrong', l)]
+          for l in lines[:40]:
+              msg = l.strip()[:900].replace('%', '%25')
+              print(f'::error title=Build error::{msg}')
+          if not lines:
+              print('::error title=Build error::Gradle failed; see the tail of the log below.')
+              for l in log.splitlines()[-40:]:
+                  print(l)
+          PY
+
+      # Surface failures as GitHub annotations rather than log text only. Job logs are not
+      # always retrievable, and an unreadable failure costs a whole debug cycle; annotations are
+      # available through the checks API and pinpoint the failing test and message.
+      - name: Report failing tests
+        if: steps.tests.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          found = False
+          for path in glob.glob('app/build/test-results/**/TEST-*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in list(case.findall('failure')) + list(case.findall('error')):
+                      found = True
+                      name = f"{case.get('classname')}.{case.get('name')}"
+                      text = (bad.get('message') or bad.text or 'test failed')[:900]
+                      text = text.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+                      print(f'::error title=Test failed {name}::{text}')
+          if not found:
+              print('::error title=Build failure::Tests task failed without producing a test report; this is usually a compilation or Gradle configuration error.')
+          PY
+          exit 1
+
+      # Runs before the APK is assembled so a dependency that smuggles in a network
+      # permission fails loudly and early rather than shipping. See the task's KDoc in
+      # app/build.gradle.kts for why the merged manifest is the thing being checked.
+      - name: Verify no network permission in merged manifest
+        id: netcheck
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          gradle --no-daemon --warning-mode all \
+            verifyDebugNoNetworkPermission verifyReleaseNoNetworkPermission 2>&1 \
+            | tee /tmp/netcheck.log
+
+      - name: Report network-permission findings
+        if: steps.netcheck.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          log = open('/tmp/netcheck.log', errors='replace').read()
+          start = log.find('* What went wrong:')
+          excerpt = log[start:start + 2000] if start != -1 else log[-2000:]
+          for line in excerpt.splitlines():
+              s = line.strip()
+              if s:
+                  print(f'::error title=Network permission check::{s[:900].replace("%", "%25")}')
+          PY
+          exit 1
 
       - name: Run Android security lint
         id: lint

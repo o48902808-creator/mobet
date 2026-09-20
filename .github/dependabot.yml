@@ -1,0 +1,30 @@
+# Dependency updates.
+#
+# This matters more than usual here: the merged-manifest check exists precisely because a
+# transitive dependency already contributed INTERNET and ACCESS_NETWORK_STATE without anyone
+# noticing (ML Kit's telemetry backend). Keeping dependencies current and reviewing each bump
+# is the other half of that defence — the check catches a bad bump, this surfaces it as a
+# reviewable PR rather than a surprise months later.
+#
+# Grouped so a routine bump is one PR, and CI (which runs the network-permission check) gates
+# every one of them.
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      androidx:
+        patterns:
+          - "androidx.*"
+      build-tooling:
+        patterns:
+          - "com.android.*"
+          - "org.jetbrains.kotlin*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly

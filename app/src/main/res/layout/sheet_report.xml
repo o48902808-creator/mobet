@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?attr/colorSurface"
+    android:orientation="vertical"
+    android:paddingBottom="@dimen/mobet_gap">
+
+    <View
+        android:layout_width="36dp"
+        android:layout_height="4dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="10dp"
+        android:background="@drawable/bg_sheet_handle" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/mobet_gap_large"
+        android:paddingTop="@dimen/mobet_gap"
+        android:paddingEnd="@dimen/mobet_gap_small">
+
+        <ImageView
+            android:id="@+id/sheetIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginEnd="12dp"
+            android:contentDescription="@null"
+            app:tint="?attr/colorPrimary"
+            tools:src="@drawable/ic_ledger" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/sheetTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textAppearance="@style/TextAppearance.Material3.TitleLarge"
+                tools:text="Audit ledger" />
+
+            <TextView
+                android:id="@+id/sheetSubtitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textAppearance="@style/TextAppearance.Mobet.Body"
+                android:visibility="gone"
+                tools:text="Hash chain verified"
+                tools:visibility="visible" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Optional status banner, e.g. ✔ chain verified / ✖ integrity failure -->
+    <TextView
+        android:id="@+id/sheetBanner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="@dimen/mobet_gap_large"
+        android:layout_marginTop="@dimen/mobet_gap"
+        android:layout_marginEnd="@dimen/mobet_gap_large"
+        android:padding="12dp"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        tools:text="✔ Hash chain verified"
+        tools:visibility="visible" />
+
+    <ai.arena.mobet.ui.MaxHeightScrollView
+        android:id="@+id/sheetScroll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/mobet_gap"
+        android:scrollbars="vertical"
+        android:paddingStart="@dimen/mobet_gap_large"
+        android:paddingEnd="@dimen/mobet_gap_large">
+
+        <LinearLayout
+            android:id="@+id/sheetBody"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ai.arena.mobet.ui.MaxHeightScrollView>
+
+    <LinearLayout
+        android:id="@+id/sheetActions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/mobet_gap"
+        android:baselineAligned="false"
+        android:gravity="end"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/mobet_gap_large"
+        android:paddingEnd="@dimen/mobet_gap_large" />
+</LinearLayout>

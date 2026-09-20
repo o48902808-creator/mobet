@@ -1,6 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      ML Kit's bundled text-recognition model pulls in com.google.android.datatransport
+      (transport-backend-cct), whose manifest declares INTERNET and ACCESS_NETWORK_STATE for
+      telemetry upload. The manifest merger folds those into our APK, which silently broke the
+      central promise that Mobet cannot reach the network — OCR itself is entirely on-device and
+      needs neither permission.
+
+      These removals are enforced by :app:verifyDebugNoNetworkPermission, which reads the MERGED
+      manifest and fails the build if a network permission survives. Do not delete them without
+      reading docs/THREAT_MODEL.md.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" tools:node="remove" />
 
     <!-- Least-privilege package visibility: only apps exposing launcher activities are visible. -->
     <queries>
@@ -24,6 +41,29 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Posts a reminder notification at a chosen time. It never starts a workflow:
+             the user still opens Mobet and presses Run, preserving the invariant that every
+             device action is explicitly user-initiated. -->
+        <receiver
+            android:name=".automation.RunReminder$Receiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="ai.arena.mobet.REMINDER_FIRE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Scoped strictly to files/exports/ so sharing a workflow cannot leak captures,
+             secrets, or ledger data. Not exported; access is granted per-URI at share time. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.exports"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <service
             android:name=".automation.MobetAccessibilityService"

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.Mobet" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/mobet_primary</item>
+        <item name="colorOnPrimary">@color/mobet_on_primary</item>
+        <item name="colorPrimaryContainer">@color/mobet_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/mobet_on_primary_container</item>
+
+        <item name="colorSecondary">@color/mobet_secondary</item>
+        <item name="colorOnSecondary">@color/mobet_on_secondary</item>
+        <item name="colorSecondaryContainer">@color/mobet_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/mobet_on_secondary_container</item>
+
+        <item name="android:colorBackground">@color/mobet_background</item>
+        <item name="colorOnBackground">@color/mobet_on_background</item>
+        <item name="colorSurface">@color/mobet_surface</item>
+        <item name="colorOnSurface">@color/mobet_on_surface</item>
+        <item name="colorSurfaceVariant">@color/mobet_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/mobet_on_surface_variant</item>
+        <item name="colorOutline">@color/mobet_outline</item>
+
+        <item name="colorError">@color/mobet_error</item>
+        <item name="colorOnError">@color/mobet_on_error</item>
+
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">false</item>
+
+        <item name="materialAlertDialogTheme">@style/Theme.Mobet.Dialog</item>
+        <item name="bottomSheetDialogTheme">@style/Theme.Mobet.BottomSheet</item>
+    </style>
+</resources>

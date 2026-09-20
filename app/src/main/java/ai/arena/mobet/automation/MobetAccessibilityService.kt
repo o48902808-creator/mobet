@@ -201,8 +201,13 @@ class MobetAccessibilityService : AccessibilityService() {
                         val x = match?.centerXPercent(bitmap.width) ?: 0.0
                         val y = match?.centerYPercent(bitmap.height) ?: 0.0
                         bitmap.recycle()
+                        // Report the query, never the matched line. bestMatch returns whole OCR
+                        // lines that *contain* the query, so echoing match.text would copy
+                        // unrelated neighbouring screen text -- an account balance sharing a line
+                        // with a "Transfer" button -- into the diagnostics log, the audit ledger
+                        // and a broadcast Intent. The ledger promises it holds no screen content.
                         if (match == null) callback(false, "OCR text not found: $query", 0.0, 0.0)
-                        else callback(true, "Matched “${match.text}” at ${match.confidence}% confidence", x, y)
+                        else callback(true, "Matched “$query” at ${match.confidence}% confidence", x, y)
                     }
                 }
                 override fun onFailure(errorCode: Int) =

@@ -38,6 +38,10 @@ object RiskEngine {
         var score = visualBase[step.action] ?: when (step.action) {
             "tap" -> 5
             "fill" -> 5
+            // Switching apps is reversible and already bounded by policy.allowedPackages, so it
+            // stays below the confirmation threshold — but it is not free, because it changes
+            // which app subsequent steps act on.
+            "launch" -> 10
             else -> 0
         }
         val reasons = mutableListOf<String>()

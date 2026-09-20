@@ -4,6 +4,7 @@ import ai.arena.mobet.agent.ScreenFingerprint
 import ai.arena.mobet.agent.SelectorResolver
 import ai.arena.mobet.agent.WorldModel
 import ai.arena.mobet.policy.PlanValidator
+import ai.arena.mobet.policy.RiskAssessment
 import ai.arena.mobet.policy.RiskEngine
 import ai.arena.mobet.policy.RiskTier
 import ai.arena.mobet.security.SecretStore
@@ -24,7 +25,7 @@ import android.view.accessibility.AccessibilityNodeInfo
  */
 class WorkflowRunner(
     private val service: MobetAccessibilityService,
-    private val log: (String) -> Unit,
+    private val emitLog: (String) -> Unit,
     private val onFinished: ((Boolean, String) -> Unit)? = null,
     private val launchTarget: Boolean = true,
     private val enforcePackageAtFirstStep: Boolean = false
@@ -44,6 +45,33 @@ class WorkflowRunner(
     private val screenVisits = mutableMapOf<String, Int>()
     private val healedSteps = mutableSetOf<Int>()
 
+    /**
+     * Plaintext secret values resolved during this run, held only to keep them *out* of the log.
+     *
+     * A step may legitimately carry a secret in a selector or a fill value, and failure messages
+     * quote the selector back to the user ("Timed out finding text ..."). Without this, a
+     * resolved secret would reach the diagnostics log, the audit ledger and a broadcast Intent
+     * in plaintext. Cleared when the run ends.
+     */
+    private val resolvedSecrets = mutableSetOf<String>()
+
+    /**
+     * Single chokepoint for run output. Every log line, including failure and cancellation
+     * messages, is redacted here rather than at each call site, so a future message cannot
+     * reintroduce the leak by forgetting to redact.
+     */
+    private fun log(message: String) = emitLog(redact(message))
+
+    private fun redact(message: String): String {
+        if (resolvedSecrets.isEmpty()) return message
+        var output = message
+        // Longest first, so a secret that contains another as a substring still fully redacts.
+        resolvedSecrets.sortedByDescending(String::length).forEach { secret ->
+            if (secret.isNotEmpty()) output = output.replace(secret, SECRET_MASK)
+        }
+        return output
+    }
+
     fun start(value: Workflow) {
         val violations = PlanValidator.validate(value)
         if (violations.isNotEmpty()) {
@@ -54,7 +82,7 @@ class WorkflowRunner(
         }
         workflow = value
         startedAt = SystemClock.uptimeMillis()
-        val elevated = value.steps.count { RiskEngine.assess(it).tier >= RiskTier.ELEVATED }
+        val elevated = value.steps.count { riskOf(it, value.variables).tier >= RiskTier.ELEVATED }
         log(
             "Policy approved “${value.name}” (${value.steps.size}/${value.policy.maxActions} actions, " +
                 "$elevated elevated-risk, self-healing ${if (value.policy.allowSelfHealing) "on" else "off"})"
@@ -71,10 +99,12 @@ class WorkflowRunner(
         cancelled = true
         awaitingConfirmation = false
         handler.removeCallbacksAndMessages(null)
-        log(reason)
+        val safe = redact(reason)
+        resolvedSecrets.clear()
+        emitLog(safe)
         if (!completionDelivered) {
             completionDelivered = true
-            onFinished?.invoke(false, reason)
+            onFinished?.invoke(false, safe)
         }
     }
 
@@ -125,13 +155,32 @@ class WorkflowRunner(
         val approved = nextActionApproved
         if (step.action != "confirm") nextActionApproved = false
         when (step.action) {
+            // Cross-app switching. The destination was validated against policy.allowedPackages
+            // by PlanValidator; it is re-checked here so a mutated plan cannot widen the boundary
+            // at execution time. The post-launch settle delay lets the new app's window attach
+            // before the next step observes the screen.
+            "launch" -> {
+                val target = step.packageName
+                if (target.isNullOrBlank()) finish("launch requires a package")
+                else if (target !in flow.policy.allowedPackages)
+                    finish("launch target $target is not in policy.allowedPackages")
+                else if (!service.launch(target)) finish("Could not launch $target")
+                else {
+                    log("Launched $target")
+                    // Treat the switch as a fresh screen so the loop guard does not attribute
+                    // the previous app's fingerprints to the new one.
+                    lastFingerprint = null
+                    screenVisits.clear()
+                    advance(maxOf(step.delayMs, LAUNCH_SETTLE_MS))
+                }
+            }
             "back" -> complete(service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK), step)
             "home" -> complete(service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME), step)
             "delay" -> advance(step.delayMs)
             "confirm" -> {
                 awaitingConfirmation = true
                 // Look ahead: a CRITICAL next step upgrades this gate to a typed confirmation.
-                val nextRisk = flow.steps.getOrNull(index + 1)?.let(RiskEngine::assess)
+                val nextRisk = flow.steps.getOrNull(index + 1)?.let { riskOf(it, flow.variables) }
                 val hardened = nextRisk != null && nextRisk.tier == RiskTier.CRITICAL
                 if (hardened) log("Critical next step — typed confirmation required")
                 service.requestConfirmation(step.message ?: "Allow the next workflow action?", hardened)
@@ -222,6 +271,46 @@ class WorkflowRunner(
             ?: ""
         )
 
+    /**
+     * Risk of a step as it will actually execute, for the confirmation look-ahead.
+     *
+     * The look-ahead used to score the *raw* step, but execution scores the *expanded* one. A
+     * step whose selector is `{{var:label}}` therefore looked like a bare tap (LOW) when the
+     * preceding confirm decided whether to harden, even though `label` resolved to "Pay $500
+     * now" (CRITICAL). The gate meant to protect the riskiest actions was weakest exactly when
+     * the risky text arrived through a variable.
+     *
+     * This substitutes variables only, and never calls [expand], which aborts the run on a
+     * missing name and would otherwise fire those side effects one step early. Secret
+     * placeholders are deliberately left unresolved: reading a secret to score a step the user
+     * has not yet approved is not worth the exposure, and a secret's *value* is not the signal
+     * risk scoring looks for. Substitution failures leave the placeholder in place, which can
+     * only under-resolve, never invent a lower score than the raw step would have produced.
+     */
+    private fun riskOf(step: Step, variables: Map<String, String>): RiskAssessment {
+        fun substitute(source: String?): String? {
+            if (source == null) return null
+            var result: String = source
+            Regex("\\{\\{var:([A-Za-z0-9_.-]+)}}").findAll(source).forEach { match ->
+                variables[match.groupValues[1]]?.let { result = result.replace(match.value, it) }
+            }
+            return result
+        }
+        val previewed = step.copy(
+            selector = Selector(
+                substitute(step.selector.text),
+                substitute(step.selector.viewId),
+                substitute(step.selector.description)
+            ),
+            value = substitute(step.value),
+            message = substitute(step.message)
+        )
+        // Take the worse of the two readings so a substitution can only ever raise the tier.
+        val raw = RiskEngine.assess(step)
+        val resolved = RiskEngine.assess(previewed)
+        return if (resolved.score >= raw.score) resolved else raw
+    }
+
     private fun expand(step: Step, variables: Map<String, String>): Step? {
         fun resolve(source: String?): String? {
             if (source == null) return null
@@ -240,6 +329,7 @@ class WorkflowRunner(
                     finish("Missing or unreadable secret: $name")
                     return null
                 }
+                if (value.isNotEmpty()) resolvedSecrets += value
                 result = result.replace(it.value, value)
             }
             return result
@@ -365,10 +455,13 @@ class WorkflowRunner(
         cancelled = true
         awaitingConfirmation = false
         handler.removeCallbacksAndMessages(null)
-        log(message)
+        // Redact before clearing, otherwise the final message loses its protection.
+        val safe = redact(message)
+        resolvedSecrets.clear()
+        emitLog(safe)
         if (!completionDelivered) {
             completionDelivered = true
-            onFinished?.invoke(message.startsWith("Completed"), message)
+            onFinished?.invoke(safe.startsWith("Completed"), safe)
         }
     }
 
@@ -386,5 +479,12 @@ class WorkflowRunner(
 
     private companion object {
         const val LOOP_GUARD_SLACK = 8
+
+        /** Stand-in for a resolved secret value in any user-visible or persisted text. */
+        const val SECRET_MASK = "[redacted secret]"
+
+
+        /** Minimum settle time after switching apps, so the new window is attached. */
+        const val LAUNCH_SETTLE_MS = 900L
     }
 }
