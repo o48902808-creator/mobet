@@ -202,3 +202,4 @@ names the code that owns it so the map can be re-verified rather than trusted.
 - Reasoning-paradigm context: [STATE_OF_THOUGHT.md](STATE_OF_THOUGHT.md)
 - Architecture notes: [ARCHITECTURE.md](ARCHITECTURE.md)
 - Manual verification: [TESTING_WALKTHROUGH.md](TESTING_WALKTHROUGH.md)
+- Social media / marketing suitability: [SOCIAL_MEDIA_AND_MARKETING.md](SOCIAL_MEDIA_AND_MARKETING.md)
