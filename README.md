@@ -65,6 +65,12 @@ the order the features were built.
 - **Safety affordances** — the hardened `APPROVE` confirmation keeps its Confirm button
   disabled until the exact word is typed, and every destructive control (clear ledger, clear
   agent memory, delete a secret or capture) is behind an explicit second confirmation.
+- **Editor that pinpoints its errors** — an invalid workflow chip shows the failing
+  line/column and tapping it drops the caret on the offending character; a policy-issue chip
+  opens the full violation report in one tap.
+- **Announced state changes** — the activity log is a polite accessibility live region, and
+  the automation service's on/off transitions are announced to screen readers, matching the
+  animated visual cue.
 - Edge-to-edge insets, 48dp touch targets, content descriptions, a light/dark palette mapped
   to Material 3 colour roles, and an in-app "How Mobet works" sheet.
 

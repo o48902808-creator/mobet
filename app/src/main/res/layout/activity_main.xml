@@ -456,6 +456,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/mobet_gap_small"
+                        android:accessibilityLiveRegion="polite"
                         android:background="@drawable/bg_status_surface"
                         android:fontFamily="monospace"
                         android:maxHeight="150dp"

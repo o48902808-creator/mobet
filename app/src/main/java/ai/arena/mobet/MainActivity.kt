@@ -6,6 +6,7 @@ import ai.arena.mobet.automation.Workflow
 import ai.arena.mobet.automation.WorkflowTransfer
 import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.security.SecretStore
+import ai.arena.mobet.ui.JsonErrorLocator
 import ai.arena.mobet.ui.JsonHighlighter
 import ai.arena.mobet.ui.MobetUi
 import ai.arena.mobet.ui.MobetUi.Row
@@ -305,9 +306,25 @@ class MainActivity : AppCompatActivity() {
         workflowSummary.removeAllViews()
         val source = editor.text?.toString().orEmpty()
         if (source.isBlank()) return
-        val workflow = runCatching { Workflow.parse(source) }.getOrNull()
+        val parsed = runCatching { Workflow.parse(source) }
+        val workflow = parsed.getOrNull()
         if (workflow == null) {
-            addChip("Invalid JSON", Tone.DANGER, R.drawable.ic_warning)
+            // Point at the breakage instead of just naming it: org.json reports a character
+            // offset, the locator turns it into a line/column, and tapping the chip drops the
+            // editor caret exactly there. Semantic errors carry no offset, so they fall back
+            // to the message head.
+            val errorMessage = parsed.exceptionOrNull()?.message
+            val location = JsonErrorLocator.locate(source, errorMessage)
+            val label = "Invalid JSON" +
+                (location?.let { " · line ${it.line}, col ${it.column}" }
+                    ?: errorMessage?.let { " · ${it.lineSequence().first().take(48)}" }.orEmpty())
+            addChip(label, Tone.DANGER, R.drawable.ic_warning) {
+                location?.let {
+                    editor.requestFocus()
+                    editor.setSelection(it.offset)
+                }
+                showStatus("Invalid JSON: ${errorMessage ?: "parse error"}", Tone.DANGER)
+            }
             return
         }
         workflow.packageName?.let { addChip(it.substringAfterLast('.'), Tone.NEUTRAL) }
@@ -316,16 +333,24 @@ class MainActivity : AppCompatActivity() {
         if (workflow.policy.allowVisualFallbacks) addChip("Visual fallback", Tone.WARNING)
         if (workflow.policy.allowSelfHealing) addChip("Self-healing", Tone.NEUTRAL)
         val violations = runCatching { PlanValidator.validate(workflow) }.getOrDefault(emptyList())
-        if (violations.isEmpty()) addChip("Policy OK", Tone.SUCCESS, R.drawable.ic_check)
-        else addChip("${violations.size} policy issue${if (violations.size == 1) "" else "s"}",
-            Tone.DANGER, R.drawable.ic_warning)
+        if (violations.isEmpty()) {
+            addChip("Policy OK", Tone.SUCCESS, R.drawable.ic_check)
+        } else {
+            // The chip summarizes; the full violation list lives one tap away in the
+            // validation report rather than hidden behind a manual menu trip.
+            addChip(
+                "${violations.size} policy issue${if (violations.size == 1) "" else "s"}",
+                Tone.DANGER, R.drawable.ic_warning
+            ) { validatePlan() }
+        }
     }
 
-    private fun addChip(label: String, tone: Tone, icon: Int? = null) {
+    private fun addChip(label: String, tone: Tone, icon: Int? = null, onClick: (() -> Unit)? = null) {
         val chip = Chip(this).apply {
             text = label
-            isClickable = false
+            isClickable = onClick != null
             isCheckable = false
+            if (onClick != null) setOnClickListener { onClick() }
             chipMinHeight = dp(28).toFloat()
             setEnsureMinTouchTargetSize(false)
             textSize = 11f
@@ -1404,6 +1429,11 @@ class MainActivity : AppCompatActivity() {
                 .withEndAction {
                     serviceDot.animate().scaleX(1f).scaleY(1f).setDuration(220).start()
                 }.start()
+            // The animation tells sighted users the gate opened/closed; a screen reader needs
+            // the same transition announced or it simply never happened for them.
+            serviceCard.announceForAccessibility(
+                getString(if (enabled) R.string.service_enabled else R.string.service_disabled)
+            )
         }
         lastServiceEnabled = enabled
         // Both the shortcut and the restricted-settings explainer are only useful while the
