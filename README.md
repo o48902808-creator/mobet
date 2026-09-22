@@ -101,7 +101,7 @@ the order the features were built.
 - Model-neutral JSON plan boundary for future local or hosted planners
 - Included harmless Android Settings demonstration
 
-No data is sent off-device. This build does not include a network permission. See the explicit [threat model](docs/THREAT_MODEL.md) for enforced invariants and residual risks.
+No data is sent off-device. This build does not include a network permission. See the explicit [threat model](docs/THREAT_MODEL.md) for enforced invariants and residual risks. For the reasoning-research context of the agent layer — what State-of-Thought endogenous reasoning is, and which of its operators Mobet runs in deterministic form (state-conditioned evidence gating) or deliberately declines (state-conditioned stopping) — see [docs/STATE_OF_THOUGHT.md](docs/STATE_OF_THOUGHT.md).
 
 ## Build and install
 

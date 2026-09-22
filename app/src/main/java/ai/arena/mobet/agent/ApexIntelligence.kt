@@ -10,17 +10,31 @@ data class BeliefState(val hypotheses: List<BeliefHypothesis>, val ambiguity: Do
 
 /** Weighted evidence fusion which preserves competing interpretations instead of forcing a label. */
 object BeliefReasoner {
-    private val sourceWeight = mapOf(
+    /**
+     * Static per-source trust. Ground-truth channels (the accessibility tree, the user) hold
+     * full weight; noisier supports (OCR, the world model) count less toward corroboration.
+     * This is the healthy-regime case of the state-conditioned policy in
+     * [StateOfThoughtPolicy]; see docs/STATE_OF_THOUGHT.md for the reasoning-paradigm context.
+     */
+    val DEFAULT_WEIGHTS: Map<EvidenceSource, Double> = mapOf(
         EvidenceSource.ACCESSIBILITY to 1.0,
         EvidenceSource.USER to 1.0,
         EvidenceSource.OCR to 0.72,
         EvidenceSource.WORLD_MODEL to 0.58
     )
 
-    fun infer(evidence: List<ObservationEvidence>): BeliefState {
+    /**
+     * [weights] overrides per-source trust, typically from a state-conditioned policy. A source
+     * omitted from the map falls back to its default rather than being silently suppressed —
+     * a partial policy can tighten named channels without orphaning the rest.
+     */
+    fun infer(
+        evidence: List<ObservationEvidence>,
+        weights: Map<EvidenceSource, Double> = DEFAULT_WEIGHTS
+    ): BeliefState {
         if (evidence.isEmpty()) return BeliefState(emptyList(), 1.0)
         val scores = evidence.groupBy { normalize(it.proposition) }.mapValues { (_, items) ->
-            items.sumOf { it.confidence.coerceIn(0.0, 1.0) * sourceWeight.getValue(it.source) }
+            items.sumOf { it.confidence.coerceIn(0.0, 1.0) * (weights[it.source] ?: DEFAULT_WEIGHTS.getValue(it.source)) }
         }
         val total = scores.values.sum().coerceAtLeast(0.0001)
         val hypotheses = scores.map { (proposition, score) ->
