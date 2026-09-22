@@ -22,8 +22,11 @@ class JsonErrorLocatorTest {
 
     @Test
     fun `locates an error on the first line`() {
-        val location = JsonErrorLocator.locate(source, "Expected literal value at character 2 of $source")
-        assertEquals(JsonErrorLocator.Location(line = 1, column = 3, offset = 2), location)
+        // Deliberately newline-free: the multi-line fixture has its newline at offset 1, so
+        // no positive offset on it sits on line 1.
+        val single = "{\"steps\": [}"
+        val location = JsonErrorLocator.locate(single, "Expected literal value at character 9 of $single")
+        assertEquals(JsonErrorLocator.Location(line = 1, column = 10, offset = 9), location)
     }
 
     @Test
