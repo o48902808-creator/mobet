@@ -136,12 +136,27 @@
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
 
-                        <TextView
+                        <LinearLayout
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="@string/section_workflow"
-                            android:textAppearance="@style/TextAppearance.Mobet.SectionLabel" />
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <ImageView
+                                android:layout_width="16dp"
+                                android:layout_height="16dp"
+                                android:layout_marginEnd="6dp"
+                                android:importantForAccessibility="no"
+                                app:srcCompat="@drawable/ic_steps"
+                                app:tint="?attr/colorOnSurfaceVariant" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/section_workflow"
+                                android:textAppearance="@style/TextAppearance.Mobet.SectionLabel" />
+                        </LinearLayout>
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/formatJson"
@@ -171,7 +186,7 @@
                         app:chipSpacingVertical="0dp"
                         app:singleLine="false" />
 
-                    <EditText
+                    <ai.arena.mobet.ui.LineNumberEditText
                         android:id="@+id/editor"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -274,11 +289,26 @@
                     android:animateLayoutChanges="true"
                     android:orientation="vertical">
 
-                    <TextView
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="@string/section_planning"
-                        android:textAppearance="@style/TextAppearance.Mobet.SectionLabel" />
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <ImageView
+                            android:layout_width="16dp"
+                            android:layout_height="16dp"
+                            android:layout_marginEnd="6dp"
+                            android:importantForAccessibility="no"
+                            app:srcCompat="@drawable/ic_plan"
+                            app:tint="?attr/colorOnSurfaceVariant" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/section_planning"
+                            android:textAppearance="@style/TextAppearance.Mobet.SectionLabel" />
+                    </LinearLayout>
 
                     <TextView
                         android:layout_width="match_parent"
@@ -337,11 +367,26 @@
                     android:animateLayoutChanges="true"
                     android:orientation="vertical">
 
-                    <TextView
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="@string/section_tools"
-                        android:textAppearance="@style/TextAppearance.Mobet.SectionLabel" />
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <ImageView
+                            android:layout_width="16dp"
+                            android:layout_height="16dp"
+                            android:layout_marginEnd="6dp"
+                            android:importantForAccessibility="no"
+                            app:srcCompat="@drawable/ic_inspect"
+                            app:tint="?attr/colorOnSurfaceVariant" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/section_tools"
+                            android:textAppearance="@style/TextAppearance.Mobet.SectionLabel" />
+                    </LinearLayout>
 
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -433,6 +478,14 @@
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
 
+                        <ImageView
+                            android:layout_width="16dp"
+                            android:layout_height="16dp"
+                            android:layout_marginEnd="6dp"
+                            android:importantForAccessibility="no"
+                            app:srcCompat="@drawable/ic_ledger"
+                            app:tint="?attr/colorOnSurfaceVariant" />
+
                         <TextView
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
@@ -516,16 +569,18 @@
             android:id="@+id/runWorkflow"
             style="@style/Widget.Mobet.Button"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="52dp"
             android:layout_weight="1"
+            android:elevation="2dp"
             android:text="@string/action_run"
+            android:textSize="15sp"
             app:icon="@drawable/ic_run" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/stopRun"
             style="@style/Widget.Mobet.Button.Danger"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_height="52dp"
             android:layout_marginStart="@dimen/mobet_gap_small"
             android:contentDescription="@string/action_stop_description"
             android:text="@string/action_stop"

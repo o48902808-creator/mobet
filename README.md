@@ -66,8 +66,12 @@ the order the features were built.
   disabled until the exact word is typed, and every destructive control (clear ledger, clear
   agent memory, delete a secret or capture) is behind an explicit second confirmation.
 - **Editor that pinpoints its errors** — an invalid workflow chip shows the failing
-  line/column and tapping it drops the caret on the offending character; a policy-issue chip
-  opens the full violation report in one tap.
+  line/column and tapping it drops the caret on the offending character; the editor itself
+  paints numbered gutter lines to match, pinned while scrolling horizontally. A policy-issue
+  chip opens the full violation report in one tap.
+- **Scannable headers, one clear primary action** — each card's section label carries its
+  glyph (workflow, planning, inspect, activity), and the run bar's Run control is taller and
+  elevated so the single consequential action reads as the single primary control.
 - **Announced state changes** — the activity log is a polite accessibility live region, and
   the automation service's on/off transitions are announced to screen readers, matching the
   animated visual cue.
