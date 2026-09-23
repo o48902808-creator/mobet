@@ -1093,6 +1093,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startDictation(target: MobetUi.Field) {
+        // Lint-visible guard (the caller already gates): the on-device recognizer exists
+        // from API 31, and NewApi tracking does not cross method boundaries.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
         speechRecognizer?.destroy()
         val recognizer = android.speech.SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
         speechRecognizer = recognizer
