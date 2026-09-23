@@ -16,7 +16,7 @@ declined — *declined, not deferred* ([STATE_OF_THOUGHT.md](STATE_OF_THOUGHT.md
 
 ## Pillar 1 — On-device intelligence behind the existing contract
 
-> **Status: core shipped on this branch (0.9 in flight).** `AiCoreModelAssistant` implements
+> **Status: core shipped on this branch.** `AiCoreModelAssistant` implements
 > the contract over the ML Kit GenAI Prompt API (Gemini Nano via AICore): created only for
 > model-assisted runs, created successfully only when `checkStatus()` reports the feature
 > available on this device, process-singleton, hard-capped per inference, falling back to the
@@ -116,7 +116,7 @@ dry-run (`PlanSimulator`) renders each path.
 
 ## Pillar 4 — Presence without a network
 
-> **Status: first two shipped on this branch (0.9 in flight).** The quick-settings tile and a
+> **Status: first two shipped on this branch.** The quick-settings tile and a
 > static launcher shortcut both run the *pinned* workflow — pinned explicitly from any library
 > sheet ("Pin to shade") or implicitly by the last successful run — through the unchanged run
 > pipeline, confirmations included, and the pin carries a source snapshot so it survives
@@ -183,3 +183,52 @@ stays covered by the share-intake), so the roadmap is complete.
 The moat is the conjunction: capability at the frontier of mobile agents, with
 assurance at the frontier of verifiable software. Every pillar above strengthens
 one side without taxing the other.
+
+## Pillar 5 — Verifiable supply chain and capability proofs
+
+> **Status: provenance is now emitted by the release pipeline.** Every release build creates a
+> GitHub Artifact Attestation for the exact `mobet.apk` subject before the publish job receives
+> it. The build job has no release-write token; the publish job only checks the recorded digest
+> and publishes the already-built bytes. This makes the release a verifiable statement about
+> source, workflow, builder identity, and artifact—not merely a file attached to a tag.
+
+The next frontier is a **capability proof, not a capability claim**. A release should carry a
+machine-readable manifest containing the APK digest, commit, test suite result, merged-manifest
+permission posture, validator version, ledger format version, and attestation reference. The
+app can display this immutable build card offline, while the audit ledger records the digest and
+verification outcome at first launch. No server, telemetry, or trust in a mutable web page is
+needed.
+
+The invariant is deliberately asymmetric: model output can improve planning, but only signed
+release provenance and deterministic local policy can establish what shipped and what may run.
+A future device-lab gate should verify the attestation, install the APK, exercise the zero-radio
+manifest check, and export a redacted ledger chain as one reproducible evidence bundle.
+
+**Acceptance gates:** `actions/attest-build-provenance` succeeds; the release digest matches the
+attested subject; `unzip -t` and package metadata checks pass; the merged manifest has no radio
+permission; the JVM and device suites pass; and a tampered APK or ledger is rejected rather than
+silently repaired.
+
+## Pillar 6 — Voice and safe tool calling
+
+Voice is now treated as an input modality, not an authority. Mobet uses Android's on-device
+`SpeechRecognizer` when available (with explicit microphone consent); cloud recognition is never
+a fallback. A future bundled Whisper/Vosk backend is compatible with this contract only if its
+model is shipped locally, its size and battery budget are accepted, and recognition output still
+requires review. Streaming audio must never be retained by default.
+
+The agent now has a typed `ToolCall`/`ToolRegistry` boundary. Model or voice intent can request
+only an allow-listed tool with bounded identifiers and arguments; unknown tools, malformed calls,
+and oversized payloads are rejected before dispatch. Tools return structured results and must
+still pass the existing deterministic policy before any device mutation. The initial tools are
+read-only screen description and action enumeration. This is the safe foundation for future
+calendar, file, or app-specific tools without turning natural language into arbitrary execution.
+
+## Implementation status: frontier phases
+
+The codebase now contains the first cross-phase contracts: an offline capability card, typed tool
+risk classes and confirmation gates, an on-device-only voice status boundary, and a portable,
+redacted ledger export format. These contracts intentionally land before richer engines: Whisper,
+new tools, and workflow bundles must plug into the same gates rather than create parallel authority
+paths. Remaining device-lab work is integration testing of the platform recognizer, attestation
+verification, and accessibility-driven recovery on representative Android versions.
