@@ -122,7 +122,8 @@ dry-run (`PlanSimulator`) renders each path.
 > pipeline, confirmations included, and the pin carries a source snapshot so it survives
 > library deletion while still tracking edits. Share-target import accepts `.mobet.json`
 > bundles (and any JSON document) via `VIEW` into the exact streamed/capped/previewed import
-> path the in-app picker uses; QR handoff stays the exploratory 1.0 item.
+> path the in-app picker uses. (QR handoff was later weighed as a 1.0 item and the camera
+> permission was not earned — the decision and the preserved zero-radio path are below.)
 
 Quick wins that make the agent feel native while keeping the manifest clean:
 
@@ -130,9 +131,20 @@ Quick wins that make the agent feel native while keeping the manifest clean:
   shade/launcher (confirmation gates still apply). Pure manifest + tiny service.
 - **Share-target import** — accept `.mobet.json` bundles via `VIEW` intent into
   the existing import pipeline (§2.3 gap, real and cheap).
-- **QR handoff (optional, exploratory)** — compressed-bundle transfer
-  person-to-person with zero radios; camera + on-device barcode scanning. Only
-  if the UX earns the camera permission decision.
+- **QR handoff** — compressed-bundle transfer person-to-person with zero
+  radios; camera + on-device barcode scanning.
+
+> **Decision: declined, with the zero-radio path preserved.** The judgment this item
+> reserved was exercised and the camera permission was not earned. Scanning would mean
+> CameraX plumbing plus a runtime camera grant and a bundled decoder — the riskiest device
+> surface in the roadmap, for a feature whose receive side already works: the system camera
+> (or any scanner) reads a bundle QR a sender rendered anywhere, and the share-intake ships
+> it straight into the validated import path. Displaying a QR from inside Mobet is bounded
+> by payload capacity (real bundles exceed a single frame, and multi-frame choreography
+> cannot be validated without device tests), and the platform bundles no encoder, so that
+> half would mean hand-rolling error-correction code for an untestable edge. If a device lab
+> ever validates multi-frame transfer, this decision is worth reopening; until then,
+> camera-app + share-import is the honest QR handoff.
 
 **Voice goals** are deliberately split out as the one pillar needing a new
 permission (`RECORD_AUDIO`, on-device `SpeechRecognizer` only). Separate
@@ -155,8 +167,9 @@ threat-model review; off by default; everything else ships without it.
 The audit ledger is already hash-chained — every entry commits to
 (previousHash|sequence|timestamp|event) in encrypted storage, `verify()` replays the chain,
 and a tamper-evident high-water mark catches tail truncation — pairing naturally with
-milestone 2 (reproducible release provenance). So 1.0's live scope is the two permission
-decisions: voice goals and QR handoff.
+milestone 2 (reproducible release provenance). Voice goals shipped under their stated
+locks; the camera permission for QR scanning was weighed and not earned (the receive side
+stays covered by the share-intake), so the roadmap is complete.
 
 ## What "frontier" must never mean here
 
