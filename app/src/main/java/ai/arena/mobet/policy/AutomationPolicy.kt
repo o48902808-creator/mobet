@@ -12,7 +12,11 @@ data class AutomationPolicy(
 ) {
     companion object {
         val DEFAULT_ACTIONS = setOf(
-            "wait", "tap", "fill", "scroll", "delay", "confirm", "back", "home", "launch"
+            "wait", "tap", "fill", "scroll", "delay", "confirm", "back", "home", "launch",
+            // Bounded control flow: decide-only actions, billed to their own hop rail at run
+            // time. They are default-allowed because they cannot touch the device; the device
+            // gates (confirm, allowlist, budgets) all still apply to what they steer.
+            "branch", "repeatuntil", "tryalternates"
         )
     }
 }
@@ -37,6 +41,15 @@ object PlanValidator {
         if (workflow.steps.size > policy.maxActions)
             add(PolicyViolation(null, "Plan has ${workflow.steps.size} actions; limit is ${policy.maxActions}"))
 
+        // Control-flow jump table, computed once for the whole plan. Duplicate labels would
+        // make a goto ambiguous, so they are violations wherever the label sits.
+        val labelIndices = buildMap<String, Int> {
+            workflow.steps.forEachIndexed { index, step ->
+                step.label?.let { label -> put(label, index) }
+            }
+        }
+        val labelCounts = workflow.steps.mapNotNull { it.label }.groupingBy { it }.eachCount()
+
         workflow.steps.forEachIndexed { index, step ->
             if (step.action !in policy.allowedActions)
                 add(PolicyViolation(index + 1, "Action “${step.action}” is not allowed"))
@@ -52,6 +65,64 @@ object PlanValidator {
                 else if (target !in policy.allowedPackages)
                     add(PolicyViolation(index + 1, "launch target “$target” is not in policy.allowedPackages"))
             }
+            // Bounded control flow (docs/FRONTIER.md pillar 3): every jump must resolve,
+            // every control step must carry its condition, repeats must aim backwards
+            // (forward "repeats" are definitionally infinite), and jump fields on ordinary
+            // actions are dead authoring rather than inert decorations.
+            if (step.label != null && (labelCounts[step.label] ?: 0) > 1) {
+                add(PolicyViolation(index + 1, "Duplicate step label “${step.label}”"))
+            }
+            fun unresolved(name: String?): Boolean = name != null && name !in labelIndices
+            if (unresolved(step.goto)) {
+                add(PolicyViolation(index + 1, "goto label “${step.goto}” does not exist"))
+            }
+            if (unresolved(step.elseGoto)) {
+                add(PolicyViolation(index + 1, "elseGoto label “${step.elseGoto}” does not exist"))
+            }
+            when (step.action) {
+                "branch" -> {
+                    if (step.expect == null) add(PolicyViolation(index + 1, "branch requires an expect condition"))
+                    if (step.goto == null) add(PolicyViolation(index + 1, "branch requires a goto label"))
+                    if (step.elseGoto != null && step.elseGoto == step.goto)
+                        add(PolicyViolation(index + 1, "branch goto and elseGoto point at the same label"))
+                }
+                "repeatuntil" -> {
+                    if (step.expect == null) add(PolicyViolation(index + 1, "repeatUntil requires an expect condition"))
+                    if (step.goto == null) add(PolicyViolation(index + 1, "repeatUntil requires a goto label"))
+                    else labelIndices[step.goto]?.let { target ->
+                        if (target >= index) add(
+                            PolicyViolation(index + 1, "repeatUntil must jump backwards (goto aims at step ${target + 1})")
+                        )
+                    }
+                }
+                "tryalternates" -> {
+                    step.options.forEachIndexed { optionIndex, option ->
+                        if (option.text == null && option.viewId == null && option.description == null) {
+                            add(PolicyViolation(index + 1, "tryAlternates option ${optionIndex + 1} has no selector fields"))
+                        }
+                        val asTap = step.copy(action = "tap", selector = option, options = emptyList())
+                        if (RiskEngine.assess(asTap).tier >= RiskTier.ELEVATED &&
+                            workflow.steps.getOrNull(index - 1)?.action != "confirm"
+                        ) {
+                            add(
+                                PolicyViolation(
+                                    index + 1,
+                                    "tryAlternates option ${optionIndex + 1} requires an immediately preceding confirm step"
+                                )
+                            )
+                        }
+                    }
+                }
+                else -> {
+                    if (step.goto != null || step.elseGoto != null) add(
+                        PolicyViolation(index + 1, "goto labels are only meaningful on branch/repeatUntil")
+                    )
+                    if (step.options.isNotEmpty()) add(
+                        PolicyViolation(index + 1, "options are only meaningful on tryAlternates")
+                    )
+                }
+            }
+
             // Post-step evidence assertions are opt-in, but an incoherent block is an
             // authoring error the runner would otherwise only discover mid-run: an empty
             // expect verifies nothing, and expecting a package outside the allowlist could

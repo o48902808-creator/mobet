@@ -254,6 +254,130 @@ class PlanValidatorTest {
     }
 
     @Test
+    fun duplicateStepLabelsAreRejected() {
+        val flow = workflow(
+            """
+            {
+              "name": "demo",
+              "package": "com.example.app",
+              "steps": [
+                { "action": "delay", "label": "x" },
+                { "action": "delay", "label": "x" }
+              ]
+            }
+            """
+        )
+        val violations = PlanValidator.validate(flow)
+        assertTrue(violations.any { it.message.contains("Duplicate step label") })
+    }
+
+    @Test
+    fun branchRequiresConditionAndTarget() {
+        val flow = workflow(
+            """
+            {
+              "name": "demo",
+              "package": "com.example.app",
+              "steps": [ { "action": "branch", "goto": "nope" } ]
+            }
+            """
+        )
+        val violations = PlanValidator.validate(flow)
+        assertTrue(violations.any { it.message.contains("branch requires an expect condition") })
+        assertTrue(violations.any { it.message.contains("does not exist") })
+    }
+
+    @Test
+    fun repeatUntilMustPointBackwards() {
+        val flow = workflow(
+            """
+            {
+              "name": "demo",
+              "package": "com.example.app",
+              "steps": [
+                { "action": "repeatUntil", "goto": "later", "expect": { "textPresent": "x" } },
+                { "action": "delay", "label": "later" }
+              ]
+            }
+            """
+        )
+        val violations = PlanValidator.validate(flow)
+        assertTrue(violations.any { it.step == 1 && it.message.contains("backwards") })
+    }
+
+    @Test
+    fun gotoOnOrdinaryActionIsRejected() {
+        val flow = workflow(
+            """
+            {
+              "name": "demo",
+              "package": "com.example.app",
+              "steps": [
+                { "action": "delay", "label": "t" },
+                { "action": "wait", "text": "x", "goto": "t" }
+              ]
+            }
+            """
+        )
+        val violations = PlanValidator.validate(flow)
+        assertTrue(violations.any { it.step == 2 && it.message.contains("only meaningful") })
+    }
+
+    @Test
+    fun tryAlternatesOptionWithoutSelectorFieldsIsRejected() {
+        val flow = workflow(
+            """
+            {
+              "name": "demo",
+              "package": "com.example.app",
+              "steps": [ { "action": "tryAlternates", "options": [ {} ] } ]
+            }
+            """
+        )
+        val violations = PlanValidator.validate(flow)
+        assertTrue(violations.any { it.message.contains("no selector fields") })
+    }
+
+    @Test
+    fun elevatedAlternatesOptionNeedsPrecedingConfirm() {
+        val flow = workflow(
+            """
+            {
+              "name": "demo",
+              "package": "com.example.app",
+              "steps": [ { "action": "tryAlternates", "options": [ { "text": "Submit payment" } ] } ]
+            }
+            """
+        )
+        val violations = PlanValidator.validate(flow)
+        assertTrue(violations.any { it.message.contains("tryAlternates option 1") && it.message.contains("confirm") })
+    }
+
+    @Test
+    fun coherentControlFlowPlanPasses() {
+        val flow = workflow(
+            """
+            {
+              "name": "demo",
+              "package": "com.example.app",
+              "steps": [
+                { "action": "delay", "label": "top" },
+                { "action": "wait", "text": "Load" },
+                { "action": "repeatUntil", "goto": "top", "maxIterations": 5,
+                  "expect": { "textPresent": "Done" } },
+                { "action": "branch", "goto": "finish", "elseGoto": "cleanup",
+                  "expect": { "textPresent": "Done" } },
+                { "action": "delay", "label": "cleanup" },
+                { "action": "tryAlternates", "options": [ { "text": "Close" }, { "viewId": "id/ok" } ] },
+                { "action": "delay", "label": "finish" }
+              ]
+            }
+            """
+        )
+        assertEquals(emptyList<PolicyViolation>(), PlanValidator.validate(flow))
+    }
+
+    @Test
     fun coherentExpectBlockAddsNoViolations() {
         val flow = workflow(
             """

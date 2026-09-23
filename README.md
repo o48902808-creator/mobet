@@ -237,6 +237,30 @@ a launch); `textPresent`/`textAbsent` match case-insensitively and support `{{va
 `{{secret:…}}` substitution with the same log masking as the step itself; `package` must be
 listed in `policy.allowedPackages`. An empty `expect` block is a policy violation.
 
+**Bounded control flow** turns a workflow from a recording into a strategy. Steps may carry
+a `label`, and three decide-only actions steer execution without touching the device
+themselves: `repeatUntil` jumps back to a label until its `expect` condition holds (capped
+by its own `maxIterations`, 1–50), `branch` takes `goto` or `elseGoto` based on its `expect`
+condition, and `tryAlternates` taps the first of its option selectors (1–8) present on the
+settled screen:
+
+```json
+{ "action": "delay", "label": "top" },
+{ "action": "wait", "text": "Load" },
+{ "action": "repeatUntil", "goto": "top", "maxIterations": 5,
+  "expect": { "textPresent": "Done" } },
+{ "action": "tryAlternates", "options": [ { "text": "Close" }, { "viewId": "id/ok" } ] }
+```
+
+Conditions evaluate against a fresh observation: `textPresent`/`textAbsent`/`package` read
+the live screen; `screenChange` compares against the runner's last observation, so it works
+after steps you control but not across a launch. Three rails keep flow bounded: each
+repeat's own `maxIterations`, a per-run control-hop budget (200, halting probable infinite
+loops), and the action budget — loops still cannot exceed `policy.maxActions` actions that
+touch the device. Statically, the validator rejects duplicate labels, dangling jumps,
+forward-aiming repeats, jump fields on ordinary actions, and elevated alternate options
+without a preceding confirm.
+
 ### Finding your way around
 
 ![Searchable picker and highlighted editor](docs/screenshots/phase3-ux.png)

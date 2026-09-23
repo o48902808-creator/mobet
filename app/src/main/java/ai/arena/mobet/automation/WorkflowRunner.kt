@@ -57,6 +57,8 @@ class WorkflowRunner(
      * stale check armed because [finish]/[cancel] set `cancelled`, which mutes consumption.
      */
     private var pendingExpectation: Pair<Int, Step>? = null
+    /** Jump table and dynamic rails for control-flow actions; built once per run in [start]. */
+    private var controlFlow: ControlFlow? = null
     private val screenVisits = mutableMapOf<String, Int>()
     private val healedSteps = mutableSetOf<Int>()
 
@@ -96,6 +98,7 @@ class WorkflowRunner(
             return
         }
         workflow = value
+        controlFlow = ControlFlow(value.steps)
         startedAt = SystemClock.uptimeMillis()
         val elevated = value.steps.count { riskOf(it, value.variables).tier >= RiskTier.ELEVATED }
         log(
@@ -172,6 +175,17 @@ class WorkflowRunner(
         // Arm the post-step evidence check against the *expanded* step, so `{{var:…}}` text in
         // the expect block reads back with the same substitutions the action itself used.
         pendingExpectation = step.expect?.let { index to step }
+        // Dynamic execution rails: loops multiply the counts PlanValidator checked statically,
+        // so decide-only hops and device-affecting actions each consume their own budget.
+        if (step.action in ControlFlow.CONTROL_ACTIONS) {
+            if (controlFlow?.consumeControlHop() != true) {
+                finish("Control-flow hop budget exhausted (${ControlFlow.MAX_CONTROL_HOPS}) — probable infinite loop")
+                return
+            }
+        } else if (controlFlow?.consumeAction(flow.policy.maxActions) != true) {
+            finish("Action budget exceeded (${flow.policy.maxActions})")
+            return
+        }
         val approved = nextActionApproved
         if (step.action != "confirm") nextActionApproved = false
         when (step.action) {
@@ -197,6 +211,72 @@ class WorkflowRunner(
             "back" -> complete(service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK), step)
             "home" -> complete(service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME), step)
             "delay" -> advance(step.delayMs)
+            "branch" -> {
+                val satisfied = evaluateControlEvidence(step)
+                val targetName = if (satisfied) step.goto else step.elseGoto
+                if (targetName == null) {
+                    advance(step.delayMs)
+                } else {
+                    val target = controlFlow?.jumpTarget(targetName)
+                    if (target == null) finish("branch: unknown label “$targetName”")
+                    else {
+                        log("Step ${index + 1}: branch ${if (satisfied) "taken" else "fallback"} → $targetName")
+                        index = target - 1
+                        advance(step.delayMs)
+                    }
+                }
+            }
+            "repeatuntil" -> {
+                if (evaluateControlEvidence(step)) {
+                    log("Step ${index + 1}: repeatUntil condition met, continuing")
+                    advance(step.delayMs)
+                } else if (controlFlow?.consumeIteration(index, step.maxIterations) != true) {
+                    finish(
+                        "repeatUntil at step ${index + 1} exhausted its maxIterations " +
+                            "(${step.maxIterations}) without the condition becoming true"
+                    )
+                } else {
+                    val target = step.goto?.let { controlFlow?.jumpTarget(it) }
+                    if (target == null) finish("repeatUntil: unknown label “${step.goto}”")
+                    else {
+                        index = target - 1
+                        advance(step.delayMs)
+                    }
+                }
+            }
+            "tryalternates" -> {
+                // First-match selector fallback, probed synchronously on the settled screen:
+                // authors place a wait before this step when settling is required.
+                val root = service.root()
+                if (root == null) {
+                    finish("tryAlternates: screen unavailable")
+                } else {
+                    var chosen: AccessibilityNodeInfo? = null
+                    var chosenIndex = -1
+                    for (i in step.options.indices) {
+                        val candidate = find(root, step.options[i])
+                        if (candidate != null) {
+                            chosen = candidate
+                            chosenIndex = i
+                            break
+                        }
+                    }
+                    if (chosen == null) {
+                        root.recycle()
+                        val tried = step.options.joinToString(", ") { serialize(it) }
+                        finish("tryAlternates: none of ${step.options.size} options matched ($tried)")
+                    } else {
+                        log("tryAlternates: option ${chosenIndex + 1}/${step.options.size} matched")
+                        val ok = try {
+                            click(chosen)
+                        } finally {
+                            chosen.recycle()
+                            root.recycle()
+                        }
+                        if (ok) advance(step.delayMs) else finish("tryAlternates: tap failed")
+                    }
+                }
+            }
             "confirm" -> {
                 awaitingConfirmation = true
                 // Look ahead: a CRITICAL next step upgrades this gate to a typed confirmation.
@@ -297,6 +377,35 @@ class WorkflowRunner(
             finish("Loop guard: screen ${fingerprint.take(8)} observed $visits times without structural change")
         }
         verifyExpectation(previous, fingerprint, packageName, snapshot.visibleLabels)
+    }
+
+    /**
+     * Evaluates a control-flow condition against a fresh observation of the current screen.
+     * Unlike the post-step check, disagreement here is *information*, not failure: a `branch`
+     * reads it as "take the fallback path" and a `repeatUntil` as "loop again".
+     *
+     * The baseline for `screenChange` is the runner's last recorded observation
+     * ([lastFingerprint]) — control reads never move it, so decisions cannot perturb the
+     * world model. `textPresent`/`textAbsent`/`package` read the live screen and are the
+     * workhorses for control conditions. Returns false when no observation is possible
+     * (screen temporarily unreadable) — a loop on missing evidence is safer than proceeding
+     * on an assumption, and missing evidence still spends hops/budget, so it terminates.
+     */
+    private fun evaluateControlEvidence(step: Step): Boolean {
+        val expectation = step.expect ?: return true
+        val root = service.root() ?: return false
+        val packageName = root.packageName?.toString().orEmpty()
+        val snapshot = try {
+            ScreenInspector.inspect(root, packageName)
+        } finally {
+            root.recycle()
+        }
+        return ExpectationChecker.check(
+            expectation,
+            ExpectationEvidence(
+                lastFingerprint, ScreenFingerprint.of(snapshot), packageName, snapshot.visibleLabels
+            )
+        ) == null
     }
 
     /**

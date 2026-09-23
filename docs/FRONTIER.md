@@ -75,6 +75,14 @@ malformed `expect:` block at parse time, not run time.
 
 ## Pillar 3 — Control flow that survives audits
 
+> **Status: core shipped on this branch.** `branch`/`repeatUntil`/`tryAlternates` with
+> labels, three dynamic rails (per-repeat `maxIterations`, a 200-hop control budget, the
+> action budget applied dynamically), and static validation of jump coherence, selector
+> alternates, and confirm-gating of elevated options. Remaining from this pillar and the
+> algorithms list: dead-end-memory routing for alternates, belief corroboration of
+> completion evidence (`BeliefReasoner.infer` on the completion path), and PlanSimulator
+> rendering of branches.
+
 **The move:** bounded control steps as first-class, validator-visible actions:
 `repeatUntil` (hard cap = run budget), `branch` on evidence, and `tryAlternates`
 backed by dead-end memory — so a workflow is a *strategy*, not a recording.

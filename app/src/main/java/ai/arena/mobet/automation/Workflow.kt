@@ -60,7 +60,17 @@ data class Step(
     val endYPercent: Double? = null,
     val durationMs: Long = 400,
     /** Optional post-step evidence assertions; null means "no verification declared". */
-    val expect: Expectation? = null
+    val expect: Expectation? = null,
+    /** Jump target name for `branch`/`repeatUntil`; labels must be unique across steps. */
+    val label: String? = null,
+    /** Label to jump to (branch when satisfied; repeatUntil while unsatisfied). */
+    val goto: String? = null,
+    /** Optional label for the unsatisfied path of `branch` (defaults to the next step). */
+    val elseGoto: String? = null,
+    /** Iteration cap for `repeatUntil`; coerced to 1..50 at parse time. */
+    val maxIterations: Int = 10,
+    /** Candidate selectors for `tryAlternates`; first match is tapped. 1..8 entries. */
+    val options: List<Selector> = emptyList()
 )
 
 data class Workflow(
@@ -119,7 +129,12 @@ data class Workflow(
                                     textAbsent = optional(expectation, "textAbsent"),
                                     packageIs = optional(expectation, "package")
                                 )
-                            }
+                            },
+                            label = optional(item, "label"),
+                            goto = optional(item, "goto"),
+                            elseGoto = optional(item, "elseGoto"),
+                            maxIterations = item.optInt("maxIterations", 10).coerceIn(1, 50),
+                            options = parseOptions(item)
                         )
                     )
                 }
@@ -150,6 +165,29 @@ data class Workflow(
         private fun optional(objectValue: JSONObject, key: String): String? =
             objectValue.optString(key).takeIf(String::isNotBlank)
 
+        /**
+         * Candidate selectors of a `tryAlternates` step. Bounded like steps themselves: the
+         * editor re-parses on every keystroke, so option lists cannot be unbounded either.
+         */
+        private fun parseOptions(item: JSONObject): List<Selector> {
+            val array = item.optJSONArray("options") ?: return emptyList()
+            require(array.length() in 1..MAX_OPTIONS) {
+                "tryAlternates has ${array.length()} options; the limit is $MAX_OPTIONS"
+            }
+            return buildList {
+                for (i in 0 until array.length()) {
+                    val option = array.getJSONObject(i)
+                    add(
+                        Selector(
+                            text = optional(option, "text"),
+                            viewId = optional(option, "viewId"),
+                            description = optional(option, "description")
+                        )
+                    )
+                }
+            }
+        }
+
         private fun percent(objectValue: JSONObject, key: String): Double? =
             if (objectValue.has(key)) objectValue.getDouble(key).coerceIn(0.02, 0.98) else null
 
@@ -161,5 +199,6 @@ data class Workflow(
         /** Hard parse-time bounds; see the comments at their enforcement points. */
         const val MAX_STEPS = 200
         const val MAX_VARIABLES = 100
+        const val MAX_OPTIONS = 8
     }
 }

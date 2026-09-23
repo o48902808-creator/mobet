@@ -138,6 +138,64 @@ class WorkflowParseTest {
         assertTrue(expect.isEmpty)
     }
 
+    @Test
+    fun controlFlowFieldsRoundTrip() {
+        val flow = Workflow.parse(
+            """
+            {
+              "name": "demo",
+              "package": "com.example.app",
+              "steps": [
+                { "action": "delay", "label": "top" },
+                {
+                  "action": "repeatUntil", "goto": "top", "maxIterations": 99,
+                  "expect": { "textPresent": "Done" }
+                },
+                {
+                  "action": "tryAlternates",
+                  "options": [ { "text": "Accept" }, { "viewId": "id/ok" }, { "description": "Close" } ]
+                },
+                { "action": "branch", "goto": "top", "elseGoto": "top", "expect": { "screenChange": true } }
+              ]
+            }
+            """
+        )
+        assertEquals("top", flow.steps[0].label)
+        assertEquals("top", flow.steps[1].goto)
+        assertEquals(50, flow.steps[1].maxIterations)  // clamped to the 1..50 window
+        assertEquals(3, flow.steps[2].options.size)
+        assertEquals("id/ok", flow.steps[2].options[1].viewId)
+        assertEquals("top", flow.steps[3].goto)
+        assertEquals("top", flow.steps[3].elseGoto)
+        assertEquals(
+            "branch",
+            flow.steps[3].action
+        )
+    }
+
+    @Test
+    fun optionsAreBoundedAtParseTime() {
+        val options = (1..(Workflow.MAX_OPTIONS + 1)).joinToString(", ") { "{ \"text\": \"x\" }" }
+        val source =
+            """{ "name": "demo", "package": "com.example.app", "steps": [ { "action": "tryAlternates", "options": [$options] } ] }"""
+        val error = runCatching { Workflow.parse(source) }.exceptionOrNull()
+        assertEquals(
+            "tryAlternates has ${Workflow.MAX_OPTIONS + 1} options; the limit is ${Workflow.MAX_OPTIONS}",
+            error?.message
+        )
+    }
+
+    @Test
+    fun blankControlFlowStringsNormaliseToNull() {
+        val flow = Workflow.parse(
+            """{ "name": "demo", "package": "com.example.app",
+              "steps": [ { "action": "branch", "label": " ", "goto": "", "expect": { "screenChange": true } } ] }"""
+        )
+        val step = flow.steps.first()
+        assertEquals(null, step.label)
+        assertEquals(null, step.goto)
+    }
+
     companion object {
         private val AutomationPolicyDefaults =
             ai.arena.mobet.policy.AutomationPolicy.DEFAULT_ACTIONS
