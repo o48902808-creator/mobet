@@ -138,6 +138,12 @@ Quick wins that make the agent feel native while keeping the manifest clean:
 permission (`RECORD_AUDIO`, on-device `SpeechRecognizer` only). Separate
 threat-model review; off by default; everything else ships without it.
 
+> **Status: shipped on this branch under those exact locks.** A 🎙 Dictate action inside
+> the goal dialog requests the mic at runtime, uses only the on-device recognizer (cloud
+> backends are refused, not fallen back to), and drops the transcript into the goal field
+> for review — voice is an input method, never execution authority; it cannot start a run.
+> Threat-model section in docs/THREAT_MODEL.md.
+
 ## Suggested sequencing
 
 | Line | Ships | New deps / permissions |

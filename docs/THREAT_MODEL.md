@@ -139,6 +139,24 @@ an explicit user initiation, same trust class as pressing Run (unlike reminders,
 run anything). The pin itself is private app data; no other app can read it or fire the
 action with effect, because the exported activity's other filters grant data, not execution.
 
+## Voice goals (RECORD_AUDIO)
+
+The single new mic use: dictating an autonomous goal, and only under these locks.
+
+- **Opt-in twice over.** Nothing listens until the user taps 🎙 Dictate inside the goal
+  dialog, and Android must grant `RECORD_AUDIO` at runtime first. Deny and the app is
+  unchanged — the tap explains the outcome and typing works as always.
+- **On-device or not at all.** Only `createOnDeviceSpeechRecognizer` is used, behind
+  `isOnDeviceRecognitionSupported` on API 31+. Devices without an on-device backend get a
+  clear "type instead" message; the cloud-recognition fallback is refused, not used, so
+  audio never leaves the phone and the no-network invariant is not even load-bearing here.
+- **Input, never authority.** The transcript is dropped into the goal field for the user to
+  read and edit; it cannot start a run, fill completion evidence, or bypass any gate. From
+  the first character of review onward it is user-authored text, held to exactly the trust
+  class of typed input.
+- **No persistence.** The recognizer is destroyed on result, error, dismiss, and activity
+  destruction; no audio or transcript is stored.
+
 ## Non-goals and residual risks
 
 - Rooted or fully compromised devices can subvert app and platform guarantees.

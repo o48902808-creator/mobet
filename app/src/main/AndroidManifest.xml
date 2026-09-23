@@ -7,6 +7,12 @@
          re-arms alarms and posts reminder notifications; it cannot start a workflow. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Voice goals (1.0): the only microphone use is on-device speech recognition for
+         dictating a goal, started by an explicit Dictate tap after a runtime grant; the
+         transcript lands in the goal field for review and cannot start a run by itself.
+         Off by default; nothing listens otherwise. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!--
       ML Kit's bundled text-recognition model pulls in com.google.android.datatransport
       (transport-backend-cct), whose manifest declares INTERNET and ACCESS_NETWORK_STATE for
@@ -28,6 +34,11 @@
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <!-- Recognition-service visibility so SpeechRecognizer can find the on-device
+             backend on Android 11+; no other packages become visible. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
         </intent>
     </queries>
 

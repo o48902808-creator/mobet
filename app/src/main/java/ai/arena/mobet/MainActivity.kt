@@ -189,6 +189,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         summaryHandler.removeCallbacks(summaryTask)
         unregisterReceiver(receiver)
+        speechRecognizer?.destroy()
+        speechRecognizer = null
         super.onDestroy()
     }
 
@@ -1023,6 +1025,7 @@ class MainActivity : AppCompatActivity() {
                     "stay authoritative — it abstains when confidence is insufficient."
             )
             .setView(MobetUi.formContainer(this, goal.layout, evidence.layout, ocr, model))
+            .setNeutralButton("🎙 Dictate") { _, _ -> }
             .setPositiveButton("Start run") { _, _ ->
                 if (goal.value.isBlank() || evidence.value.isBlank()) {
                     showStatus("Goal and exact completion evidence are required", Tone.DANGER)
@@ -1041,6 +1044,132 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.action_cancel, null)
             .show()
+            .apply {
+                // Keep the review dialog open for dictation: a neutral button would normally
+                // dismiss it. The transcript lands IN the field — dictation is an input
+                // method, never execution authority (docs/THREAT_MODEL.md).
+                getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                    dictateGoal(goal)
+                }
+            }
+    }
+
+    // ── Voice goals (1.0; RECORD_AUDIO, on-device only) ─────────────────────
+
+    private var speechRecognizer: android.speech.SpeechRecognizer? = null
+    private var dictationDialog: androidx.appcompat.app.AlertDialog? = null
+
+    /**
+     * Voice goals, gated as docs/FRONTIER.md demands: off by default (nothing happens until
+     * the user taps Dictate), the only microphone use is an *on-device* recognizer (the cloud
+     * fallback is refused, not used), and the transcript is placed in the goal field for the
+     * user to review and edit — it never starts a run by itself.
+     */
+    private fun dictateGoal(target: MobetUi.Field) {
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO)
+            showStatus(
+                "Microphone needed once for dictation — audio is recognized on this device only",
+                Tone.WARNING
+            )
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            !android.speech.SpeechRecognizer.isOnDeviceRecognitionSupported(this)
+        ) {
+            showStatus(
+                "On-device speech recognition is unavailable on this device — type the goal instead",
+                Tone.WARNING
+            )
+            return
+        }
+        startDictation(target)
+    }
+
+    private fun startDictation(target: MobetUi.Field) {
+        speechRecognizer?.destroy()
+        val recognizer = android.speech.SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+        speechRecognizer = recognizer
+        val dialog = MobetUi.dialog(this)
+            .setTitle("Listening")
+            .setIcon(R.drawable.ic_record)
+            .setMessage("Speak the goal.\n\nRecognized entirely on this device.")
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+        dialog.setOnDismissListener {
+            speechRecognizer?.destroy()
+            speechRecognizer = null
+            dictationDialog = null
+        }
+        dictationDialog = dialog
+
+        recognizer.setRecognitionListener(object : android.speech.RecognitionListener {
+            override fun onResults(results: Bundle) {
+                val heard = results
+                    .getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull().orEmpty().trim()
+                dialog.dismiss()
+                if (heard.isEmpty()) showStatus("Did not catch that — try again", Tone.WARNING)
+                else {
+                    target.input.setText(heard)
+                    target.input.setSelection(heard.length)
+                    showStatus("Heard “$heard” — review it, then start the run", Tone.SUCCESS)
+                }
+            }
+
+            override fun onPartialResults(partialResults: Bundle) {
+                val partial = partialResults
+                    .getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull().orEmpty()
+                if (partial.isNotBlank()) dictationDialog?.setMessage("Speak the goal.\n\n$partial")
+            }
+
+            override fun onError(error: Int) {
+                dialog.dismiss()
+                val why = when (error) {
+                    android.speech.SpeechRecognizer.ERROR_NO_MATCH,
+                    android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech recognized"
+                    android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
+                        "Microphone permission missing"
+                    else -> "Recognition unavailable right now"
+                }
+                showStatus("$why — type the goal instead", Tone.WARNING)
+            }
+
+            override fun onReadyForSpeech(params: Bundle?) = Unit
+            override fun onBeginningOfSpeech() = Unit
+            override fun onRmsChanged(rmsdB: Float) = Unit
+            override fun onBufferReceived(buffer: ByteArray?) = Unit
+            override fun onEndOfSpeech() = Unit
+            override fun onEvent(eventType: Int, params: Bundle?) = Unit
+        })
+        recognizer.startListening(
+            android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                .putExtra(
+                    android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                )
+                .putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        )
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_RECORD_AUDIO) {
+            val granted = grantResults.firstOrNull() ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            showStatus(
+                if (granted) "Microphone granted — tap 🎙 Dictate again"
+                else "No microphone; voice goals stay off — typing works as always",
+                if (granted) Tone.SUCCESS else Tone.WARNING
+            )
+        }
     }
 
     private fun showGoalPlanner() {
@@ -1804,6 +1933,9 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val ACTION_STOP_AUTONOMY = "ai.arena.mobet.STOP_AUTONOMY"
         const val ACTION_OPEN_WORKFLOW = "ai.arena.mobet.OPEN_WORKFLOW"
+
+        /** Runtime-permission request code for voice-goal dictation (RECORD_AUDIO). */
+        const val REQUEST_RECORD_AUDIO = 42
 
         /**
          * Minimal valid workflow, used only if the bundled sample asset cannot be read.
