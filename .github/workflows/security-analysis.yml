@@ -57,7 +57,7 @@ jobs:
       #
       # To enable: Settings → Code security and analysis → Dependency graph.
       # Once enabled, drop `continue-on-error` so moderate+ advisories block merges again.
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/dependency-review-action@v5
         continue-on-error: true
         with:
           fail-on-severity: moderate
