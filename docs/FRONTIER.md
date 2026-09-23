@@ -81,8 +81,12 @@ malformed `expect:` block at parse time, not run time.
 > three dynamic rails (per-repeat `maxIterations`, a 200-hop control budget, the action
 > budget applied dynamically), static validation of jump coherence and confirm-gating, and
 > dead-end-memory routing: options recorded dead on this screen are skipped with an
-> auditable log line. Remaining from the algorithms list: PlanSimulator rendering of
-> branches (0.9 input measurement) and the Dempster–Shafer evidence-fusion upgrade.
+> auditable log line. `PlanSimulator` renders control flow as paths — branch targets resolved
+> to step numbers, loop spans with caps, every alternate graded — and closes with a
+> conservative worst-case path estimate against both execution rails (`maxActions`, 200-hop
+> budget), warning when a looped run can outrun either; the grounded-selector tally doubles
+> as the static plan-quality measurement that 0.9's model assistance consumes. Remaining from
+> the algorithms list: the Dempster–Shafer evidence-fusion upgrade.
 
 **The move:** bounded control steps as first-class, validator-visible actions:
 `repeatUntil` (hard cap = run budget), `branch` on evidence, and `tryAlternates`
