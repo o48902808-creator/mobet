@@ -48,6 +48,10 @@ The equivalent manual settings, as a fallback:
 
 ## 3. Cutting the release
 
+> **Doing this from a phone?** [`docs/GO_LIVE_PHONE.md`](GO_LIVE_PHONE.md) is the
+> same process as a tap-by-tap walkthrough — merge, settings, release, install,
+> first run — designed for the GitHub mobile layout.
+
 The APK asset is built by *Actions → Release APK → Run workflow* (or by pushing a
 `v*` tag). Version stays **0.7.0 / versionCode 8** for this line; the next release
 tag is therefore:
