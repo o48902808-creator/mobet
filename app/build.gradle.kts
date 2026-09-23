@@ -205,7 +205,11 @@ dependencies {
     implementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
     // Offline Sigstore bundle verification. Runtime trust is loaded only from the pinned asset;
     // sigstorePublicDefaults() is deliberately never used because Mobet has no network permission.
-    implementation("dev.sigstore:sigstore-java:2.2.0")
+    implementation("dev.sigstore:sigstore-java:2.2.0") {
+        // sigstore-java carries the generated Google API protos it consumes; retaining the
+        // transitive copy would produce duplicate DEX classes.
+        exclude(group = "com.google.api.grpc", module = "proto-google-common-protos")
+    }
 
     testImplementation("junit:junit:4.13.2")
     // Real org.json implementation for JVM unit tests (the android.jar version is stubbed).
