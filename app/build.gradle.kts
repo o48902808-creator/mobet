@@ -135,7 +135,13 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    // KGP 2.3 DSL: kotlinOptions is deprecated/removed under the compiler the GenAI Prompt
+    // client requires (its jars carry 2.3.0 metadata), so the target is set here.
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
+    }
 
     testOptions {
         unitTests.isReturnDefaultValues = true
