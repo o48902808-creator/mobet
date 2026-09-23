@@ -215,4 +215,65 @@ class PlanValidatorTest {
         val violations = PlanValidator.validate(flow)
         assertTrue(violations.any { it.step == 2 && it.message.contains("not allowed") })
     }
+
+    @Test
+    fun expectBlockWithoutAssertionsIsRejected() {
+        val flow = workflow(
+            """
+            {
+              "name": "demo",
+              "package": "com.example.app",
+              "steps": [ { "action": "delay", "expect": {} } ]
+            }
+            """
+        )
+        val violations = PlanValidator.validate(flow)
+        assertTrue(violations.any { it.step == 1 && it.message.contains("no assertions") })
+    }
+
+    @Test
+    fun expectPackageOutsideAllowlistIsRejected() {
+        val flow = workflow(
+            """
+            {
+              "name": "demo",
+              "package": "com.example.app",
+              "steps": [
+                { "action": "tap", "text": "x", "expect": { "package": "com.example.other" } }
+              ]
+            }
+            """
+        )
+        val violations = PlanValidator.validate(flow)
+        assertTrue(
+            violations.any {
+                it.step == 1 && it.message.contains("com.example.other") &&
+                    it.message.contains("allowedPackages")
+            }
+        )
+    }
+
+    @Test
+    fun coherentExpectBlockAddsNoViolations() {
+        val flow = workflow(
+            """
+            {
+              "name": "demo",
+              "package": "com.example.app",
+              "steps": [
+                { "action": "delay" },
+                {
+                  "action": "tap", "text": "Network & internet",
+                  "expect": {
+                    "screenChange": true,
+                    "textPresent": "Connected",
+                    "package": "com.example.app"
+                  }
+                }
+              ]
+            }
+            """
+        )
+        assertEquals(emptyList<PolicyViolation>(), PlanValidator.validate(flow))
+    }
 }

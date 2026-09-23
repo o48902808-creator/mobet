@@ -50,6 +50,13 @@ class WorkflowRunner(
     private var confirmationGeneration = 0
     private var startedAt = 0L
     private var lastFingerprint: String? = null
+    /**
+     * The previously dispatched step awaiting its post-state evidence check, paired with the
+     * step number it was dispatched as. Set at dispatch, consumed exactly once by the first
+     * observation in the next [executeCurrent] tick — skipped steps and halts never leave a
+     * stale check armed because [finish]/[cancel] set `cancelled`, which mutes consumption.
+     */
+    private var pendingExpectation: Pair<Int, Step>? = null
     private val screenVisits = mutableMapOf<String, Int>()
     private val healedSteps = mutableSetOf<Int>()
 
@@ -162,6 +169,9 @@ class WorkflowRunner(
         val riskNote = if (risk.tier >= RiskTier.ELEVATED)
             " · risk ${risk.tier.name.lowercase()} (${risk.reasons.joinToString(", ")})" else ""
         log("Step ${index + 1}/${flow.steps.size}: ${step.action}$riskNote")
+        // Arm the post-step evidence check against the *expanded* step, so `{{var:…}}` text in
+        // the expect block reads back with the same substitutions the action itself used.
+        pendingExpectation = step.expect?.let { index to step }
         val approved = nextActionApproved
         if (step.action != "confirm") nextActionApproved = false
         when (step.action) {
@@ -286,6 +296,33 @@ class WorkflowRunner(
         if (visits > limit) {
             finish("Loop guard: screen ${fingerprint.take(8)} observed $visits times without structural change")
         }
+        verifyExpectation(previous, fingerprint, packageName, snapshot.visibleLabels)
+    }
+
+    /**
+     * Consumes the armed post-step evidence check (docs/FRONTIER.md pillar 2). The previous
+     * step's declared expectations are evaluated against what this observation actually sees;
+     * a mismatch halts the run with the failing assertion named, so a silent no-op tap can
+     * never hand an unverified screen to the next step. Unreadable screens skip the check
+     * entirely (this method is only called with a captured snapshot), and an empty observation
+     * window after `launch` reads as a vacuous pass inside the checker, not here.
+     */
+    private fun verifyExpectation(
+        previous: String?,
+        fingerprint: String,
+        packageName: String,
+        visibleLabels: Set<String>
+    ) {
+        val pending = pendingExpectation
+        pendingExpectation = null
+        if (pending == null || cancelled) return
+        val (expectIndex, expectStep) = pending
+        val expectation = expectStep.expect ?: return
+        ExpectationChecker.check(
+            expectation, ExpectationEvidence(previous, fingerprint, packageName, visibleLabels)
+        )?.let { failure ->
+            finish("Step ${expectIndex + 1} evidence check failed: $failure")
+        }
     }
 
     private fun transitionLabel(step: Step): String = step.action + (
@@ -365,9 +402,18 @@ class WorkflowRunner(
         val ifText = resolve(step.ifText) ?: if (step.ifText != null) return null else null
         val unlessText = resolve(step.unlessText) ?: if (step.unlessText != null) return null else null
         val message = resolve(step.message) ?: if (step.message != null) return null else null
+        // Evidence assertions resolve through the same substitution (and the same secret
+        // masking) as the step itself, so an expect on resolved text cannot leak into logs.
+        val expect = step.expect?.let { expectation ->
+            val present = resolve(expectation.textPresent)
+                ?: if (expectation.textPresent != null) return null else null
+            val absent = resolve(expectation.textAbsent)
+                ?: if (expectation.textAbsent != null) return null else null
+            expectation.copy(textPresent = present, textAbsent = absent)
+        }
         return step.copy(
             selector = Selector(text, id, description), value = value,
-            ifText = ifText, unlessText = unlessText, message = message
+            ifText = ifText, unlessText = unlessText, message = message, expect = expect
         )
     }
 

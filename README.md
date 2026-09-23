@@ -214,6 +214,29 @@ Define non-sensitive values in the root `variables` object and reference them as
 }
 ```
 
+A step may also declare **post-step evidence** with `expect`: the run halts with a named
+reason if the next screen doesn't satisfy the assertions, so a silent no-op tap never hands
+an unverified screen to the next step. Assertions are checked once, against the first
+observation after the step, over the accessibility label channel:
+
+```json
+{
+  "action": "tap",
+  "text": "Wi-Fi",
+  "expect": {
+    "screenChange": true,
+    "textPresent": "Network & internet",
+    "textAbsent": "Airplane mode",
+    "package": "com.android.settings"
+  }
+}
+```
+
+`screenChange` compares the screen fingerprint (vacuous without a baseline, e.g. right after
+a launch); `textPresent`/`textAbsent` match case-insensitively and support `{{var:…}}` /
+`{{secret:…}}` substitution with the same log masking as the step itself; `package` must be
+listed in `policy.allowedPackages`. An empty `expect` block is a policy violation.
+
 ### Finding your way around
 
 ![Searchable picker and highlighted editor](docs/screenshots/phase3-ux.png)

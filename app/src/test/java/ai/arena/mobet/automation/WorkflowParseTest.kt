@@ -89,6 +89,55 @@ class WorkflowParseTest {
         )
     }
 
+    @Test
+    fun expectBlockParsesAllAssertionKinds() {
+        val flow = Workflow.parse(
+            """
+            {
+              "name": "demo",
+              "package": "com.example.app",
+              "steps": [
+                {
+                  "action": "tap", "text": "Wi-Fi",
+                  "expect": {
+                    "screenChange": true,
+                    "textPresent": "Network & internet",
+                    "textAbsent": "Settings",
+                    "package": "com.example.app"
+                  }
+                }
+              ]
+            }
+            """
+        )
+        val expect = flow.steps.first().expect!!
+        assertTrue(expect.screenChange)
+        assertEquals("Network & internet", expect.textPresent)
+        assertEquals("Settings", expect.textAbsent)
+        assertEquals("com.example.app", expect.packageIs)
+        assertFalse(expect.isEmpty)
+    }
+
+    @Test
+    fun stepsWithoutExpectParseAsNull() {
+        val flow = Workflow.parse(
+            """{ "name": "demo", "package": "com.example.app", "steps": [ { "action": "delay" } ] }"""
+        )
+        assertEquals(null, flow.steps.first().expect)
+    }
+
+    @Test
+    fun blankExpectStringsNormaliseToNullSoEmptyBlocksAreDetectable() {
+        val flow = Workflow.parse(
+            """
+            { "name": "demo", "package": "com.example.app",
+              "steps": [ { "action": "delay", "expect": { "textPresent": "  ", "package": "" } } ] }
+            """
+        )
+        val expect = flow.steps.first().expect!!
+        assertTrue(expect.isEmpty)
+    }
+
     companion object {
         private val AutomationPolicyDefaults =
             ai.arena.mobet.policy.AutomationPolicy.DEFAULT_ACTIONS

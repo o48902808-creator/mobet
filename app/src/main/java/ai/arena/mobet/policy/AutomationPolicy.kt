@@ -52,6 +52,24 @@ object PlanValidator {
                 else if (target !in policy.allowedPackages)
                     add(PolicyViolation(index + 1, "launch target “$target” is not in policy.allowedPackages"))
             }
+            // Post-step evidence assertions are opt-in, but an incoherent block is an
+            // authoring error the runner would otherwise only discover mid-run: an empty
+            // expect verifies nothing, and expecting a package outside the allowlist could
+            // never be observed true without first crossing the hard package boundary.
+            step.expect?.let { expectation ->
+                if (expectation.isEmpty) {
+                    add(PolicyViolation(index + 1, "expect block declares no assertions"))
+                }
+                val expectedPackage = expectation.packageIs
+                if (expectedPackage != null && expectedPackage !in policy.allowedPackages) {
+                    add(
+                        PolicyViolation(
+                            index + 1,
+                            "expect package “$expectedPackage” is not in policy.allowedPackages"
+                        )
+                    )
+                }
+            }
             val risk = RiskEngine.assess(step)
             if (risk.tier >= RiskTier.ELEVATED &&
                 workflow.steps.getOrNull(index - 1)?.action != "confirm"

@@ -9,6 +9,33 @@ data class Selector(
     val description: String? = null
 )
 
+/**
+ * Post-step evidence assertions (verified execution — docs/FRONTIER.md pillar 2).
+ *
+ * A step may declare what the screen must look like *after* it executes: a structural change,
+ * text that must be present or gone, and/or the package that must be active. The next screen
+ * observation after the step is checked by [ExpectationChecker]; a mismatch halts the run
+ * with a named reason instead of letting later steps act on an unverified state.
+ *
+ * Screening is single-shot: the check runs once, at the first observation after the step,
+ * because later observations belong to later steps. Timing-sensitive assertions belong in a
+ * `wait`/`ocrwait` step before the asserting step.
+ */
+data class Expectation(
+    /** The screen fingerprint must differ from the pre-step baseline (vacuous without one). */
+    val screenChange: Boolean = false,
+    /** Case-insensitive substring that must appear among visible accessibility labels. */
+    val textPresent: String? = null,
+    /** Case-insensitive substring that must NOT appear among visible accessibility labels. */
+    val textAbsent: String? = null,
+    /** The active package after the step; PlanValidator requires membership in allowedPackages. */
+    val packageIs: String? = null
+) {
+    /** A block with no assertions is an authoring error flagged by PlanValidator. */
+    val isEmpty: Boolean
+        get() = !screenChange && textPresent == null && textAbsent == null && packageIs == null
+}
+
 data class Step(
     val action: String,
     val selector: Selector = Selector(),
@@ -31,7 +58,9 @@ data class Step(
     val yPercent: Double? = null,
     val endXPercent: Double? = null,
     val endYPercent: Double? = null,
-    val durationMs: Long = 400
+    val durationMs: Long = 400,
+    /** Optional post-step evidence assertions; null means "no verification declared". */
+    val expect: Expectation? = null
 )
 
 data class Workflow(
@@ -82,7 +111,15 @@ data class Workflow(
                             yPercent = percent(item, "yPercent"),
                             endXPercent = percent(item, "endXPercent"),
                             endYPercent = percent(item, "endYPercent"),
-                            durationMs = item.optLong("durationMs", 400).coerceIn(50, 5_000)
+                            durationMs = item.optLong("durationMs", 400).coerceIn(50, 5_000),
+                            expect = item.optJSONObject("expect")?.let { expectation ->
+                                Expectation(
+                                    screenChange = expectation.optBoolean("screenChange", false),
+                                    textPresent = optional(expectation, "textPresent"),
+                                    textAbsent = optional(expectation, "textAbsent"),
+                                    packageIs = optional(expectation, "package")
+                                )
+                            }
                         )
                     )
                 }

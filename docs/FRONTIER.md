@@ -45,6 +45,12 @@ exercised on emulator.
 
 ## Pillar 2 — Verified execution: beliefs become evidence
 
+> **Status: shipped on this branch.** The `expect:` block, validator rules, runner evidence
+> check with named halts, and the JVM suite (`ExpectationCheckerTest`,
+> `WorkflowParseTest`/`PlanValidatorTest` expect cases) are implemented. The belief
+> corroboration half — wiring `BeliefReasoner.infer` into completion evidence — lands
+> alongside control flow in pillar 3.
+
 **The move:** add an optional per-step `expect:` block (fingerprint delta, OCR
 text presence/absence, node-id appearance). After each step the runner checks
 the *evidence* before continuing, and `TemporalBeliefTracker` — today write-only
