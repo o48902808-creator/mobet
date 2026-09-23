@@ -9,6 +9,9 @@ import ai.arena.mobet.automation.WorkflowTransfer
 import ai.arena.mobet.audit.AuditLedger
 import ai.arena.mobet.audit.LedgerBuildIdentity
 import ai.arena.mobet.audit.LedgerExport
+import ai.arena.mobet.planner.IntentSource
+import ai.arena.mobet.planner.IntentToPlanPipeline
+import ai.arena.mobet.planner.RunMode
 import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.provenance.BuildIntegrity
 import ai.arena.mobet.provenance.BuildIntegrityReport
@@ -1184,6 +1187,7 @@ class MainActivity : AppCompatActivity() {
         val evidence = MobetUi.Field(this, "Completion evidence", "Exact on-screen text, e.g. Internet")
         val ocr = MobetUi.checkBox(this, "Consent to on-device OCR for completion evidence")
         val model = MobetUi.checkBox(this, "Use structured on-device candidate ranking")
+        var voiceTranscriptReviewed = false
 
         MobetUi.dialog(this)
             .setTitle("Bounded autonomous run")
@@ -1196,20 +1200,16 @@ class MainActivity : AppCompatActivity() {
             )
             .setView(MobetUi.formContainer(this, goal.layout, evidence.layout, ocr, model))
             .setNeutralButton("🎙 Dictate") { _, _ -> }
-            .setPositiveButton("Start run") { _, _ ->
-                if (goal.value.isBlank() || evidence.value.isBlank()) {
-                    showStatus("Goal and exact completion evidence are required", Tone.DANGER)
-                } else {
-                    showBusy(true)
-                    service.startAutonomous(
-                        ai.arena.mobet.agent.AgentGoal(
-                            goal.value, evidence.value, snapshot.packageName,
-                            maxCycles = 20, maxRisk = 29, minConfidence = 0.67,
-                            lookaheadExpansions = 32,
-                            allowOcrEvidence = ocr.isChecked,
-                            allowModelAssistance = model.isChecked
-                        )
-                    )
+            .setPositiveButton("Preview plan") { _, _ ->
+                IntentToPlanPipeline.prepare(
+                    goal.value,
+                    evidence.value,
+                    snapshot.packageName,
+                    if (voiceTranscriptReviewed) IntentSource.VOICE_TRANSCRIPT else IntentSource.TYPED
+                ).onSuccess { preview ->
+                    showAutonomousPlanPreview(preview, ocr.isChecked, model.isChecked, service)
+                }.onFailure {
+                    showStatus("Goal rejected: ${it.message}", Tone.DANGER)
                 }
             }
             .setNegativeButton(R.string.action_cancel, null)
@@ -1219,9 +1219,42 @@ class MainActivity : AppCompatActivity() {
                 // dismiss it. The transcript lands IN the field — dictation is an input
                 // method, never execution authority (docs/THREAT_MODEL.md).
                 getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                    dictateGoal(goal)
+                    dictateGoal(goal) { voiceTranscriptReviewed = true }
                 }
             }
+    }
+
+    private fun showAutonomousPlanPreview(
+        preview: ai.arena.mobet.planner.AgentPlanPreview,
+        allowOcr: Boolean,
+        allowModel: Boolean,
+        service: MobetAccessibilityService
+    ) {
+        MobetUi.ReportSheet(this)
+            .title("Execution plan", R.drawable.ic_plan)
+            .subtitle("Explain mode · no device actions have run")
+            .banner("Review required before execution", Tone.WARNING)
+            .monospace(preview.explanation(RunMode.EXPLAIN))
+            .paragraph(
+                "On-device OCR: ${if (allowOcr) "consented" else "off"}\n" +
+                    "Model assistance: ${if (allowModel) "enabled as an untrusted proposer" else "off"}\n\n" +
+                    "The candidate route is selected from fresh accessibility observations at " +
+                    "runtime. Every action is revalidated before execution."
+            )
+            .action("Dry run") {
+                MobetUi.ReportSheet(this)
+                    .title("Autonomous dry run", R.drawable.ic_dryrun)
+                    .subtitle("Simulation only · the device was not touched")
+                    .monospace(preview.explanation(RunMode.DRY_RUN))
+                    .action(getString(R.string.action_close))
+                    .show()
+            }
+            .action("Execute", primary = true) {
+                showBusy(true)
+                service.startAutonomous(preview.asAgentGoal(allowOcr, allowModel))
+            }
+            .action(getString(R.string.action_cancel))
+            .show()
     }
 
     // ── Voice goals (1.0; RECORD_AUDIO, on-device only) ─────────────────────
@@ -1230,7 +1263,7 @@ class MainActivity : AppCompatActivity() {
     private var dictationDialog: androidx.appcompat.app.AlertDialog? = null
 
     /** Voice is an input method only: explicit permission, offline engine, editable transcript. */
-    private fun dictateGoal(target: MobetUi.Field) {
+    private fun dictateGoal(target: MobetUi.Field, onTranscriptReady: () -> Unit = {}) {
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
             android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {
@@ -1274,6 +1307,7 @@ class MainActivity : AppCompatActivity() {
                 dialog.dismiss()
                 target.input.setText(transcript.text)
                 target.input.setSelection(transcript.text.length)
+                onTranscriptReady()
                 // Never echo transcript text into diagnostics or the persistent ledger.
                 showStatus(
                     "Offline transcript ready — review and edit it before starting the run",
