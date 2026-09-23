@@ -1,5 +1,6 @@
 package ai.arena.mobet
 
+import ai.arena.mobet.automation.ExecutionTimelineEvent
 import ai.arena.mobet.automation.MobetAccessibilityService
 import ai.arena.mobet.automation.PresenceLauncher
 import ai.arena.mobet.automation.RunReminder
@@ -79,6 +80,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var editor: EditText
     private lateinit var workflowSummary: ChipGroup
     private lateinit var runProgress: CircularProgressIndicator
+    private lateinit var timelinePanel: View
+    private lateinit var timelineState: TextView
+    private lateinit var timelineGoal: TextView
+    private lateinit var timelineStep: TextView
+    private lateinit var timelineDetail: TextView
 
     /** Rolling in-memory log so the activity card shows history, not just the newest line. */
     private val activityLog = ArrayDeque<String>()
@@ -126,6 +132,9 @@ class MainActivity : AppCompatActivity() {
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             intent?.getStringExtra(MobetAccessibilityService.EXTRA_STATUS)?.let { showStatus(it) }
+            intent?.getStringExtra(MobetAccessibilityService.EXTRA_TIMELINE)?.let { source ->
+                runCatching { ExecutionTimelineEvent.parse(source) }.onSuccess(::renderTimeline)
+            }
             refreshServiceState()
         }
     }
@@ -164,6 +173,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshServiceState()
+        MobetAccessibilityService.instance?.currentTimeline()?.let(::renderTimeline)
     }
 
     /**
@@ -216,6 +226,11 @@ class MainActivity : AppCompatActivity() {
         editor = findViewById(R.id.editor)
         workflowSummary = findViewById(R.id.workflowSummary)
         runProgress = findViewById(R.id.runProgress)
+        timelinePanel = findViewById(R.id.timelinePanel)
+        timelineState = findViewById(R.id.timelineState)
+        timelineGoal = findViewById(R.id.timelineGoal)
+        timelineStep = findViewById(R.id.timelineStep)
+        timelineDetail = findViewById(R.id.timelineDetail)
 
         status.movementMethod = ScrollingMovementMethod()
         status.text = getString(R.string.status_ready)
@@ -1948,6 +1963,49 @@ class MainActivity : AppCompatActivity() {
     private fun applyServiceColor(color: Int) {
         serviceDot.background?.mutate()?.let { DrawableCompat.setTint(it, color) }
         serviceState.setTextColor(color)
+    }
+
+    private fun renderTimeline(event: ExecutionTimelineEvent) {
+        timelinePanel.visibility = View.VISIBLE
+        timelineState.text = "${event.state.name} · ${event.mode.uppercase(Locale.US)}"
+        timelineState.setTextColor(
+            ContextCompat.getColor(
+                this,
+                when (event.state) {
+                    ExecutionTimelineEvent.State.SUCCEEDED -> R.color.mobet_success
+                    ExecutionTimelineEvent.State.HALTED -> R.color.mobet_danger
+                    ExecutionTimelineEvent.State.WAITING,
+                    ExecutionTimelineEvent.State.RECOVERING -> R.color.mobet_warning
+                    else -> R.color.mobet_primary
+                }
+            )
+        )
+        timelineGoal.text = "Goal: ${event.goal}"
+        timelineStep.text = buildString {
+            if (event.step != null) {
+                append("Step ").append(event.step)
+                event.totalSteps?.let { append(" of ").append(it) }
+            } else append("Preparing run")
+            event.subgoal?.let { append("\nSubgoal: ").append(it) }
+            event.action?.let { append("\nAction: ").append(it) }
+        }
+        timelineDetail.text = buildList {
+            event.screenFingerprint?.let { add("Screen      $it") }
+            event.confidence?.let { add("Confidence  $it%") }
+            event.risk?.let { add("Risk        $it") }
+            event.evidence?.let { add("Evidence    $it") }
+            event.policy?.let { add("Policy      $it") }
+            event.recovery?.let { add("Recovery    $it") }
+            event.stopReason?.let { add("Stopped     $it") }
+        }.joinToString("\n")
+        showBusy(
+            event.state in setOf(
+                ExecutionTimelineEvent.State.PLANNING,
+                ExecutionTimelineEvent.State.RUNNING,
+                ExecutionTimelineEvent.State.WAITING,
+                ExecutionTimelineEvent.State.RECOVERING
+            )
+        )
     }
 
     private fun showBusy(busy: Boolean) {

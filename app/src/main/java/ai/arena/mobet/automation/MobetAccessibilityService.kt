@@ -13,9 +13,12 @@ class MobetAccessibilityService : AccessibilityService() {
     private val ledger by lazy { ai.arena.mobet.audit.AuditLedger(this) }
     private val worldModel by lazy { ai.arena.mobet.agent.WorldModel(this) }
     private val agentMemory by lazy { ai.arena.mobet.agent.PersistentExperienceStore(this) }
-    private val liveAgent by lazy { ai.arena.mobet.agent.LiveAndroidAgent(this, agentMemory, ::emit) }
+    private val liveAgent by lazy {
+        ai.arena.mobet.agent.LiveAndroidAgent(this, agentMemory, ::emit, ::emitTimeline)
+    }
     private var lastInspectionAt = 0L
     @Volatile private var snapshot: ScreenSnapshot? = null
+    @Volatile private var latestTimeline: ExecutionTimelineEvent? = null
 
     override fun onServiceConnected() {
         instance = this
@@ -47,7 +50,7 @@ class MobetAccessibilityService : AccessibilityService() {
     fun run(workflow: Workflow) {
         liveAgent.cancel("Autonomous run replaced by workflow", quiet = true)
         runner?.cancel("Replaced by a new run")
-        runner = WorkflowRunner(this, ::emit).also { it.start(workflow) }
+        runner = WorkflowRunner(this, ::emit, emitTimeline = ::emitTimeline).also { it.start(workflow) }
     }
 
     fun startAutonomous(goal: ai.arena.mobet.agent.AgentGoal) {
@@ -322,6 +325,16 @@ class MobetAccessibilityService : AccessibilityService() {
         return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
 
+    private fun emitTimeline(event: ExecutionTimelineEvent) {
+        latestTimeline = event
+        sendBroadcast(
+            Intent(ACTION_STATUS).setPackage(packageName)
+                .putExtra(EXTRA_TIMELINE, event.toJson())
+        )
+    }
+
+    fun currentTimeline(): ExecutionTimelineEvent? = latestTimeline
+
     private fun emit(message: String) {
         val preferences = getSharedPreferences("diagnostics", MODE_PRIVATE)
         val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
@@ -336,6 +349,7 @@ class MobetAccessibilityService : AccessibilityService() {
         const val ACTION_STATUS = "ai.arena.mobet.STATUS"
         const val ACTION_CONFIRM = "ai.arena.mobet.CONFIRM"
         const val EXTRA_STATUS = "status"
+        const val EXTRA_TIMELINE = "timeline"
         const val EXTRA_CONFIRM_MESSAGE = "confirm_message"
         const val EXTRA_CONFIRM_HARDENED = "confirm_hardened"
         private const val AUTONOMY_CHANNEL = "apex-active-run"

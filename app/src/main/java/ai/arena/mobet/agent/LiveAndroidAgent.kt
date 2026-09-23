@@ -1,5 +1,6 @@
 package ai.arena.mobet.agent
 
+import ai.arena.mobet.automation.ExecutionTimelineEvent
 import ai.arena.mobet.automation.InspectedElement
 import ai.arena.mobet.automation.MobetAccessibilityService
 import ai.arena.mobet.automation.ScreenSnapshot
@@ -66,7 +67,8 @@ object AccessibilityObservationAdapter {
 class LiveAndroidAgent(
     private val service: MobetAccessibilityService,
     private val memory: ExperienceStore,
-    private val emit: (String) -> Unit
+    private val emit: (String) -> Unit,
+    private val emitTimeline: (ExecutionTimelineEvent) -> Unit = {}
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var deliberator = Deliberator(memory)
@@ -91,6 +93,37 @@ class LiveAndroidAgent(
     private val frames = ArrayDeque<Pair<String, String>>()
     private val recoveryAttempts = mutableMapOf<FailureKind, Int>()
 
+    private fun timeline(
+        state: ExecutionTimelineEvent.State,
+        observation: AgentObservation? = null,
+        action: AgentAction? = null,
+        confidence: Double? = null,
+        evidence: String? = null,
+        recovery: String? = null,
+        stopReason: String? = null
+    ) {
+        val target = goal ?: return
+        val assessment = action?.let(AccessibilityObservationAdapter::toStep)?.let(RiskEngine::assess)
+        emitTimeline(
+            ExecutionTimelineEvent(
+                state = state,
+                mode = "Autonomous",
+                goal = target.description,
+                subgoal = hierarchy?.current?.description,
+                step = cycles.takeIf { it > 0 },
+                totalSteps = target.maxCycles,
+                screenFingerprint = observation?.screenId,
+                action = action?.let { "${it.kind.name.lowercase()} · ${it.id.substringAfter(':').take(12)}" },
+                confidence = confidence?.times(100)?.toInt()?.coerceIn(0, 100),
+                evidence = evidence,
+                risk = assessment?.let { "${it.tier.name.lowercase()} · score ${it.score}" },
+                policy = if (action == null) "Deterministic policy authority" else "Allowed by AgentPlanValidator",
+                recovery = recovery,
+                stopReason = stopReason
+            )
+        )
+    }
+
     fun start(value: AgentGoal) {
         cancel("Autonomous run replaced", quiet = true)
         require(value.maxCycles in 1..50) { "Cycle budget must be 1–50" }
@@ -114,15 +147,21 @@ class LiveAndroidAgent(
             else -> "local structured"
         }
         emit("Apex autonomous run started · ${plan?.subgoals?.size} subgoals · ${value.maxCycles} cycle budget · OCR ${if (value.allowOcrEvidence) "consented" else "off"} · model $modelEngine")
+        timeline(
+            ExecutionTimelineEvent.State.PLANNING,
+            evidence = "Success requires: ${value.successFact}",
+        )
         if (!service.launchTarget(value.allowedPackage)) finish(AgentStatus.BLOCKED, "could not launch target package")
         else handler.postDelayed(::tick, 800)
     }
 
     fun cancel(reason: String = "Autonomous run stopped", quiet: Boolean = false) {
-        if (!cancelled) service.stopGuardedExecution()
+        val wasActive = !cancelled
+        if (wasActive) service.stopGuardedExecution()
         runGeneration++
         service.hideAutonomyNotification()
         cancelled = true; handler.removeCallbacksAndMessages(null)
+        if (wasActive) timeline(ExecutionTimelineEvent.State.HALTED, stopReason = reason)
         if (!quiet) emit(reason)
     }
 
@@ -218,10 +257,16 @@ class LiveAndroidAgent(
             execute(observation, AgentAction("back", "Back", kind = AgentActionKind.BACK), true)
             return
         }
-        execute(observation, action, false, decision.confidence)
+        execute(observation, action, false, decision.confidence, decision.reason)
     }
 
-    private fun execute(before: AgentObservation, action: AgentAction, backtrack: Boolean, confidence: Double = 1.0) {
+    private fun execute(
+        before: AgentObservation,
+        action: AgentAction,
+        backtrack: Boolean,
+        confidence: Double = 1.0,
+        evidence: String? = null
+    ) {
         val target = goal ?: return
         val violations = AgentPlanValidator.validate(target, listOf(action))
         if (violations.isNotEmpty()) { finish(AgentStatus.BLOCKED, violations.joinToString { it.message }); return }
@@ -229,6 +274,13 @@ class LiveAndroidAgent(
         checkpoints.beforeAction(target, cycles, action)
         stabilizer.reset()
         val generation = runGeneration
+        timeline(
+            ExecutionTimelineEvent.State.RUNNING,
+            before,
+            action,
+            confidence,
+            evidence ?: if (backtrack) "Reversible backtrack after dead end" else "Highest bounded utility"
+        )
         emit("Apex cycle $cycles/${target.maxCycles}: ${action.kind.name.lowercase()} ${action.id.substringAfter(':').take(8)} · confidence ${(confidence * 100).toInt()}%")
         service.runGuardedAgentAction(action, target) { accepted, detail ->
             if (cancelled || generation != runGeneration) return@runGuardedAgentAction
@@ -276,7 +328,14 @@ class LiveAndroidAgent(
             return false
         }
         recoveryAttempts[kind] = attempts + 1
-        emit("Apex recovery ${policy.action.name.lowercase()} ${attempts + 1}/${policy.maxAttempts} for ${kind.name.lowercase()}")
+        val recovery = "${policy.action.name.lowercase()} ${attempts + 1}/${policy.maxAttempts} for ${kind.name.lowercase()}"
+        timeline(
+            ExecutionTimelineEvent.State.RECOVERING,
+            before,
+            recovery = recovery,
+            evidence = "No verified progress after action"
+        )
+        emit("Apex recovery $recovery")
         when (policy.action) {
             RecoveryAction.WAIT -> handler.postDelayed(::tick, 1_200)
             RecoveryAction.RETURN_TO_APP -> {
@@ -303,6 +362,13 @@ class LiveAndroidAgent(
         checkpoints.finish()
         service.hideAutonomyNotification()
         cancelled = true; runGeneration++; handler.removeCallbacksAndMessages(null)
+        timeline(
+            if (status == AgentStatus.SUCCEEDED) ExecutionTimelineEvent.State.SUCCEEDED
+            else ExecutionTimelineEvent.State.HALTED,
+            service.currentSnapshot()?.let { AccessibilityObservationAdapter.adapt(it) },
+            evidence = if (status == AgentStatus.SUCCEEDED) detail else null,
+            stopReason = if (status == AgentStatus.SUCCEEDED) null else detail
+        )
         emit("Apex ${status.name.lowercase()}: $detail · $cycles cycles")
     }
 
