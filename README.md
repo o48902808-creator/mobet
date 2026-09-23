@@ -139,6 +139,9 @@ installer refuses the update, **uninstall the old Mobet first** — this clears 
 saved workflows, secrets, captures, and audit ledger — then install the downloaded
 APK.
 
+Maintainer release runbook (merge evidence, the three one-time repository settings,
+tagging v0.7.0, upgrade/rollback semantics): [docs/PRODUCTION.md](docs/PRODUCTION.md).
+
 ### Build from source
 
 Prerequisites: Android Studio Ladybug or newer, Android SDK 35, and JDK 17.
