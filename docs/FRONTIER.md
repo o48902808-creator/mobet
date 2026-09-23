@@ -223,3 +223,12 @@ and oversized payloads are rejected before dispatch. Tools return structured res
 still pass the existing deterministic policy before any device mutation. The initial tools are
 read-only screen description and action enumeration. This is the safe foundation for future
 calendar, file, or app-specific tools without turning natural language into arbitrary execution.
+
+## Implementation status: frontier phases
+
+The codebase now contains the first cross-phase contracts: an offline capability card, typed tool
+risk classes and confirmation gates, an on-device-only voice status boundary, and a portable,
+redacted ledger export format. These contracts intentionally land before richer engines: Whisper,
+new tools, and workflow bundles must plug into the same gates rather than create parallel authority
+paths. Remaining device-lab work is integration testing of the platform recognizer, attestation
+verification, and accessibility-driven recovery on representative Android versions.
