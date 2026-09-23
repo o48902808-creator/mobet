@@ -72,6 +72,11 @@ the order the features were built.
 - **Scannable headers, one clear primary action** — each card's section label carries its
   glyph (workflow, planning, inspect, activity), and the run bar's Run control is taller and
   elevated so the single consequential action reads as the single primary control.
+- **Motion with meaning** — cold starts stagger the cards and run bar into place top to
+  bottom; the service dot breathes while automation is armed (and pops when it flips); summary
+  chips fade in as they rebuild; the workflow card's outline warms while the editor holds
+  focus; error-chip jumps flash the offending character. Every animation gates on the system
+  animator-scale setting, so "remove animations" is respected end to end.
 - **Announced state changes** — the activity log is a polite accessibility live region, and
   the automation service's on/off transitions are announced to screen readers, matching the
   animated visual cue.

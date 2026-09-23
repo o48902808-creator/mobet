@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var serviceDetail: TextView
     private lateinit var serviceDot: View
     private lateinit var serviceCard: MaterialCardView
+    private lateinit var workflowCard: MaterialCardView
     private lateinit var status: TextView
     private lateinit var editor: EditText
     private lateinit var workflowSummary: ChipGroup
@@ -75,6 +76,12 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var highlighter: JsonHighlighter
     private var highlighting = false
+
+    /** Looping "armed" cue for the service dot; cancelled whenever the service drops. */
+    private var dotBreath: android.animation.ObjectAnimator? = null
+
+    /** The most recent error-flash span, removed by reference so the highlighter is untouched. */
+    private var lastErrorFlash: android.text.style.BackgroundColorSpan? = null
 
     /**
      * Package of the app a recording was started in, kept so the import can write it into the
@@ -124,7 +131,9 @@ class MainActivity : AppCompatActivity() {
         bindViews()
         applyWindowInsets()
         wireActions()
+        configureMotion()
         loadWorkflowSource()
+        if (savedInstanceState == null) playEntranceChoreography()
 
         ContextCompat.registerReceiver(
             this,
@@ -157,6 +166,7 @@ class MainActivity : AppCompatActivity() {
      */
     override fun onPause() {
         super.onPause()
+        dotBreath?.cancel()
         persistDraft()
     }
 
@@ -185,6 +195,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun bindViews() {
         serviceCard = findViewById(R.id.serviceCard)
+        workflowCard = findViewById(R.id.workflowCard)
         serviceState = findViewById(R.id.serviceState)
         serviceDetail = findViewById(R.id.serviceDetail)
         serviceDot = findViewById(R.id.serviceDot)
@@ -204,6 +215,135 @@ class MainActivity : AppCompatActivity() {
                 R.id.menu_reminders -> { showReminders(); true }
                 else -> false
             }
+        }
+    }
+
+    // ── Motion ───────────────────────────────────────────────────────────────
+
+    /**
+     * True unless the user (or a test device) turned animations off globally. Every
+     * animation in this file checks this gate first so the system "remove animations"
+     * accessibility setting is respected instead of overridden.
+     */
+    private fun motionEnabled(): Boolean =
+        Settings.Global.getFloat(
+            contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f
+        ) > 0f
+
+    /**
+     * Cold-start choreography: the functional cards rise and fade in one after another
+     * (50ms stagger), ending on the pinned run bar, so a first launch reads as a guided
+     * top-to-bottom tour of the app's structure rather than a wall of controls snapping
+     * into place. Runs exactly once per process — configuration changes restore views
+     * instantly — and is skipped entirely when animations are disabled.
+     */
+    private fun playEntranceChoreography() {
+        if (!motionEnabled()) return
+        val content = (findViewById<View>(R.id.contentScroll) as? androidx.core.widget.NestedScrollView)
+            ?.getChildAt(0) as? android.view.ViewGroup ?: return
+        val targets = buildList {
+            for (i in 0 until content.childCount) add(content.getChildAt(i))
+            add(findViewById(R.id.runBar))
+        }
+        targets.forEachIndexed { index, view ->
+            view.alpha = 0f
+            view.translationY = dp(14).toFloat()
+            view.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setStartDelay(80L + index * 50L)
+                .setDuration(280)
+                .setInterpolator(android.view.animation.DecelerateInterpolator(1.4f))
+                .withLayer()
+                .start()
+        }
+    }
+
+    /**
+     * Wires the persistent micro-motion: summary chips fade in while the row rebuilds,
+     * and the workflow card's outline warms to the primary tint for as long as the
+     * editor holds focus — the two most frequent interactions get a quiet state echo.
+     * Removals stay instant so rebuilding chips after each debounced keystroke never
+     * ghosts stale labels over the new row.
+     */
+    private fun configureMotion() {
+        workflowSummary.layoutTransition = android.animation.LayoutTransition().apply {
+            enableTransitionType(android.animation.LayoutTransition.APPEARING)
+            disableTransitionType(android.animation.LayoutTransition.DISAPPEARING)
+            setDuration(android.animation.LayoutTransition.APPEARING, 180L)
+            setStartDelay(android.animation.LayoutTransition.APPEARING, 0L)
+        }
+
+        editor.setOnFocusChangeListener { _, hasFocus ->
+            val from = workflowCard.strokeColor
+            val to = ContextCompat.getColor(
+                this, if (hasFocus) R.color.mobet_primary else R.color.mobet_outline
+            )
+            if (from == to || !motionEnabled()) {
+                workflowCard.strokeColor = to
+            } else {
+                android.animation.ValueAnimator.ofObject(
+                    android.animation.ArgbEvaluator(), from, to
+                ).apply {
+                    duration = 160
+                    addUpdateListener { workflowCard.strokeColor = it.animatedValue as Int }
+                    start()
+                }
+            }
+        }
+    }
+
+    /**
+     * Washes the offending character in the danger tint, decaying over three beats before
+     * removal. Round 11 drops the caret exactly where the parser failed; the flash is
+     * what makes that landing visible on a dense line. Spans are removed by reference and
+     * the text model itself is never modified, so this coexists with the highlighter and
+     * with draft persistence (spans are not saved).
+     */
+    private fun flashErrorAt(offset: Int) {
+        if (!motionEnabled()) return
+        if (editor.text?.let { offset in it.indices } != true) return
+        val base = ContextCompat.getColor(this, R.color.mobet_danger)
+        intArrayOf(0x59, 0x38, 0x1C).forEachIndexed { step, alpha ->
+            editor.postDelayed({
+                val current = editor.text ?: return@postDelayed
+                if (offset !in current.indices) return@postDelayed
+                lastErrorFlash?.let { current.removeSpan(it) }
+                val span = android.text.style.BackgroundColorSpan(
+                    (base and 0x00FFFFFF) or (alpha shl 24)
+                )
+                current.setSpan(
+                    span, offset, offset + 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                lastErrorFlash = span
+            }, step * 150L)
+        }
+        editor.postDelayed({
+            lastErrorFlash?.let { editor.text?.removeSpan(it) }
+            lastErrorFlash = null
+        }, 520L)
+    }
+
+    /**
+     * While automation is armed the service dot breathes on a slow cycle: the glance that
+     * answers "is it live right now?" gets a persistent cue that does not rely on colour
+     * alone. The loop is cancelled the moment the service drops, when animations are off,
+     * or when the activity pauses, and the alpha reset happens before recreation so this
+     * never fights the enable/disable pop.
+     */
+    private fun updateDotBreathing(enabled: Boolean) {
+        if (enabled && motionEnabled() && dotBreath?.isRunning == true) return
+        dotBreath?.cancel()
+        dotBreath = null
+        serviceDot.alpha = 1f
+        if (!enabled || !motionEnabled()) return
+        dotBreath = android.animation.ObjectAnimator.ofFloat(
+            serviceDot, View.ALPHA, 1f, 0.55f
+        ).apply {
+            duration = 1400
+            repeatMode = android.animation.ValueAnimator.REVERSE
+            repeatCount = android.animation.ValueAnimator.INFINITE
+            start()
         }
     }
 
@@ -322,6 +462,7 @@ class MainActivity : AppCompatActivity() {
                 location?.let {
                     editor.requestFocus()
                     editor.setSelection(it.offset)
+                    flashErrorAt(it.offset)
                 }
                 showStatus("Invalid JSON: ${errorMessage ?: "parse error"}", Tone.DANGER)
             }

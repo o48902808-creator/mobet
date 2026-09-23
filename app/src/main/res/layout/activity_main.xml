@@ -119,6 +119,7 @@
 
             <!-- ══ Workflow editor ════════════════════════════════════ -->
             <com.google.android.material.card.MaterialCardView
+                android:id="@+id/workflowCard"
                 style="@style/Widget.Mobet.Card"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
