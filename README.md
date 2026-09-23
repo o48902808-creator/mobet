@@ -1,5 +1,19 @@
 # Mobet
 
+## Local build prerequisites
+
+Mobet targets Java 17 and Gradle 8.9. Use `./gradlew` for a clear prerequisite
+check; CI provisions the toolchain automatically. The repository intentionally
+does not commit the Gradle wrapper JAR or a JDK.
+
+```sh
+./gradlew :app:testDebugUnitTest
+```
+
+If the check reports a missing tool, install a JDK 17 and Gradle 8.9 using your
+OS package manager or Gradle toolchain manager.
+
+
 Mobet is an Android-first, on-device mobile automation prototype. It uses Android's Accessibility API to locate controls and run explicit JSON workflows that the phone owner starts.
 
 ## Frontier capabilities (v0.7.0)
