@@ -32,7 +32,7 @@ class MobetTileService : TileService() {
     }
 
     /** The only route on API 26–33; the PendingIntent overload exists from API 34. */
-    @android.annotation.SuppressLint("Deprecated")
+    @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated")
     private fun launchLegacy(target: Intent) = startActivityAndCollapse(target)
 
     override fun onStartListening() {
