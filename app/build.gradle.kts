@@ -151,7 +151,8 @@ android {
             "META-INF/NOTICE",
             "META-INF/NOTICE.txt",
             "META-INF/INDEX.LIST",
-            "META-INF/io.netty.versions.properties"
+            "META-INF/io.netty.versions.properties",
+            "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         )
     }
 
