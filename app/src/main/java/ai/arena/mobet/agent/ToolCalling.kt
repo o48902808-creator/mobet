@@ -143,7 +143,12 @@ class ToolRegistry(
             ?: return denied(call, null, "unknown_tool", context, "Unknown tool: ${call.name}")
         val spec = specs().first { it.name == tool.name }
         val policyError = ToolPlanGate.validate(listOf(call), listOf(spec), context)
-        if (policyError != null) return denied(call, tool, "denied: $policyError", context, policyError)
+        if (policyError != null) {
+            val decision = if (policyError.startsWith("Invalid ${tool.name} input:")) {
+                "schema_rejected"
+            } else "denied: $policyError"
+            return denied(call, tool, decision, context, policyError)
+        }
         if (call.arguments.size > MAX_ARGUMENTS || call.arguments.any { it.key.length > 48 || it.value.length > 512 }) {
             return denied(call, tool, "argument_limits", context, "Tool arguments exceed safety limits")
         }
