@@ -85,6 +85,29 @@ jobs:
           open(path, "a").write("\n")
           PYTHON
 
+      - name: Generate privacy-preserving evidence bundle
+        run: |
+          python3 scripts/build-evidence-bundle.py \
+            --apk mobet.apk --capability mobet-capability.json \
+            --tests app/build/test-results --output mobet-evidence.zip
+          sha256sum mobet-evidence.zip > mobet-evidence.zip.sha256
+
+      - name: Rebuild independently and report reproducibility
+        run: |
+          gradle --no-daemon clean assembleDebug
+          SECOND=app/build/outputs/apk/debug/app-debug.apk
+          FIRST_SHA="$(sha256sum mobet.apk | awk '{print $1}')"
+          SECOND_SHA="$(sha256sum "$SECOND" | awk '{print $1}')"
+          STATUS=non-reproducible
+          test "$FIRST_SHA" != "$SECOND_SHA" || STATUS=reproducible
+          python3 - "$FIRST_SHA" "$SECOND_SHA" "$STATUS" <<'PYTHON'
+          import json, sys
+          json.dump({"schema":"mobet.reproducibility.v1","firstSha256":sys.argv[1],
+                     "secondSha256":sys.argv[2],"status":sys.argv[3]}, open("mobet-reproducibility.json","w"), indent=2)
+          open("mobet-reproducibility.json","a").write("\n")
+          PYTHON
+          cat mobet-reproducibility.json
+
       - name: Generate SLSA build provenance
         uses: actions/attest-build-provenance@v2
         with:
@@ -98,6 +121,9 @@ jobs:
             mobet.apk
             mobet.apk.sha256
             mobet-capability.json
+            mobet-evidence.zip
+            mobet-evidence.zip.sha256
+            mobet-reproducibility.json
           if-no-files-found: error
 
   publish:
@@ -141,6 +167,7 @@ jobs:
           EOF
 
           gh release create "$TAG" mobet.apk mobet.apk.sha256 mobet-capability.json \
+            mobet-evidence.zip mobet-evidence.zip.sha256 mobet-reproducibility.json \
             --repo "$REPO" \
             --target "$COMMIT" \
             --title "$TITLE" \
