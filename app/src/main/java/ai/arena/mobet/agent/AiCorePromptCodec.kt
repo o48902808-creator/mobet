@@ -84,9 +84,11 @@ object AiCorePromptCodec {
     }
 
     /**
-     * First-`[` to last-`]` extraction: a `]` inside a string value precedes the true end,
-     * so the greedy last index is still the array close; trailing chatter after the array
-     * simply fails the parse and yields null, which the caller treats as "no model output".
+     * First-`[` to last-`]` extraction. The JSON reader parses the first complete array and
+     * ignores anything after it, so model chatter past the JSON is tolerated; extraction
+     * fails closed (null) only when there are no brackets at all or the array itself is
+     * malformed. An empty array parses to an empty list — equally inert downstream, where
+     * `takeIf { it.isNotEmpty() }` routes it to the fallback either way.
      */
     internal fun extractJsonArray(raw: String): JSONArray? {
         val start = raw.indexOf('[')

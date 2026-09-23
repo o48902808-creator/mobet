@@ -53,16 +53,27 @@ class AiCorePromptCodecTest {
 
     @Test
     fun unparseableOutputFailsClosed() {
+        // No brackets at all, an opening bracket the model never closes, or a token the
+        // lenient JSON reader cannot accept mid-array — those are the only hard failures.
         assertNull(AiCorePromptCodec.parseSubgoals("I cannot help with that."))
-        assertNull(AiCorePromptCodec.parseSubgoals("[] [ unbalanced ] ] ]"))
         assertNull(AiCorePromptCodec.parseSubgoals(""))
+        assertNull(AiCorePromptCodec.parseSubgoals("[1, 2, 3"))
+        assertNull(AiCorePromptCodec.parseSubgoals("[\"abc, \"def\"]"))
         assertNull(AiCorePromptCodec.parseRankingIds("not json at all"))
+        assertNull(AiCorePromptCodec.parseRankingIds("\"1\", \"2\""))
     }
 
     @Test
-    fun trailingChatterAfterArrayFailsRatherThanGuessing() {
-        // A `]` later than the array close makes the extract unparseable → fail closed.
-        assertNull(AiCorePromptCodec.parseSubgoals("[{\"description\": \"x\"}] trailing ] note"))
+    fun emptyArrayParsesToSomethingInert() {
+        assertTrue(AiCorePromptCodec.parseSubgoals("[]")!!.isEmpty())
+        assertTrue(AiCorePromptCodec.parseSubgoals("[] [ junk")!!.isEmpty())
+    }
+
+    @Test
+    fun modelChatterAfterTheJsonIsTolerated() {
+        // The reader stops at the first complete array; anything past it is ignored.
+        val parsed = AiCorePromptCodec.parseSubgoals("[{\"description\": \"x\"}] trailing ] note ]")
+        assertEquals(listOf("x"), parsed!!.map { it.description })
     }
 
     @Test
