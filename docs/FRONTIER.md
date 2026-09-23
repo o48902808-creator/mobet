@@ -95,8 +95,11 @@ malformed `expect:` block at parse time, not run time.
 > to step numbers, loop spans with caps, every alternate graded — and closes with a
 > conservative worst-case path estimate against both execution rails (`maxActions`, 200-hop
 > budget), warning when a looped run can outrun either; the grounded-selector tally doubles
-> as the static plan-quality measurement that 0.9's model assistance consumes. Remaining from
-> the algorithms list: the Dempster–Shafer evidence-fusion upgrade.
+> as the static plan-quality measurement that 0.9's model assistance consumes. The
+> Dempster–Shafer fusion upgrade shipped with it: evidence combines under Dempster's rule
+> with the conflict mass surfaced as ambiguity — corroboration compounds across channels,
+> noise cannot dilute a ground-truth read, and total contradiction reports total doubt
+> instead of a dragged label. The pillar's algorithm list is complete.
 
 **The move:** bounded control steps as first-class, validator-visible actions:
 `repeatUntil` (hard cap = run budget), `branch` on evidence, and `tryAlternates`
@@ -143,9 +146,11 @@ threat-model review; off by default; everything else ships without it.
 | 0.9 | Pillar 1A: AICore `ModelAssistant` (device-gated, off by default) + QS tile + share-import | AICore client only; model conformance suite |
 | 1.0 | Voice goals (opt-in review) · QR handoff (if earned) · hash-chained ledger | `RECORD_AUDIO` decision · camera decision |
 
-Hash-chaining the audit ledger (each entry commits to its predecessor) pairs
-naturally with milestone 2 (reproducible release provenance): tamper-evident
-records for a tamper-evident artifact.
+The audit ledger is already hash-chained — every entry commits to
+(previousHash|sequence|timestamp|event) in encrypted storage, `verify()` replays the chain,
+and a tamper-evident high-water mark catches tail truncation — pairing naturally with
+milestone 2 (reproducible release provenance). So 1.0's live scope is the two permission
+decisions: voice goals and QR handoff.
 
 ## What "frontier" must never mean here
 
