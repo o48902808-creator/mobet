@@ -73,16 +73,21 @@ class ManifestPostureTest {
     @Test
     fun declaresOnlyTheExpectedPermissions() {
         // Catches a *new* permission of any kind, including ones not yet on the forbidden list.
-        // The full set today: POST_NOTIFICATIONS (run reminders + the active-run indicator) and
+        // The full set today: POST_NOTIFICATIONS (run reminders + the active-run indicator),
         // RECEIVE_BOOT_COMPLETED (re-arming those reminders after a reboot — see
-        // RunReminder.BootReceiver, which can only post notifications, never start a workflow).
+        // RunReminder.BootReceiver, which can only post notifications, never start a
+        // workflow), and RECORD_AUDIO — added deliberately for 1.0 voice goals: runtime-gated,
+        // started only by an explicit Dictate tap, on-device recognizer only, no persistence
+        // (docs/THREAT_MODEL.md "Voice goals"). The justification the assertion below demands
+        // is that section; this test is the lock that keeps the set from growing past it.
         val declared = permissionEntries().filter { !it.second }.map { it.first }
         assertEquals(
             "Mobet's permission set changed. Every permission is a capability an accessibility " +
                 "service can abuse; justify it in the threat model before adding it here.",
             listOf(
                 "android.permission.POST_NOTIFICATIONS",
-                "android.permission.RECEIVE_BOOT_COMPLETED"
+                "android.permission.RECEIVE_BOOT_COMPLETED",
+                "android.permission.RECORD_AUDIO"
             ),
             declared
         )
