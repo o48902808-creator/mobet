@@ -22,24 +22,29 @@ variant runs `verify*NoNetworkPermission` against the **merged** manifest, so a
 dependency bump can never smuggle `INTERNET` into a shipped artifact. See
 `app/build.gradle.kts` and `docs/THREAT_MODEL.md`.
 
-## 2. Post-merge repository settings (3 one-time actions)
+## 2. Post-merge repository settings (3 one-time actions, automated)
 
-Applied on `main` after the PR lands:
+All three are automated — two paths, both idempotent (re-running verifies rather than
+re-changes):
 
-1. **Dependency graph** — *Settings → Code security and analysis → Dependency graph
-   → Enable.* CodeQL dependency review consumes it; public repositories have it on
-   by default, verify rather than assume.
-2. **Branch protection for `main`** — *Settings → Branches → Add branch ruleset:*
-   - target: `main`
-   - require a pull request before merging
-   - require status checks to pass, and select:
-     `Build & JVM unit tests`, `Connected device tests`,
-     `CodeQL Java and Kotlin`, `Dependency review`
-   - block force pushes and deletions (default)
-3. **Pin dependency checksums** — *Actions → Pin dependency checksums → Run workflow.*
-   This rewrites `gradle/verification-metadata.xml` with checksums for every
-   resolved dependency and opens the result as a commit/PR. Merge that, and every
-   subsequent build fails on a tampered artifact instead of compiling it.
+**A. One click** — *Actions → Post-merge repo setup → Run workflow.* With the built-in
+`GITHUB_TOKEN` it verifies the dependency graph and dispatches Pin dependency checksums;
+branch protection needs an admin scope that token never has, so the job prints the exact
+command instead of failing.
+
+**B. One command** — `bash scripts/post-merge-setup.sh` with your own `gh` login applies
+**all three**: dependency graph (verified/enabled), branch protection on `main`, and the
+checksum-pinning dispatch (skipped if it has ever run).
+
+The equivalent manual settings, as a fallback:
+
+1. **Dependency graph** — public repositories have it on by default, so this is normally a
+   verification, not a change: *Settings → Code security and analysis → Dependency graph.*
+2. **Branch protection for `main`** — require a pull request and the four status checks
+   (`Build & JVM unit tests`, `Connected device tests`, `CodeQL Java and Kotlin`,
+   `Dependency review`); block force pushes and deletions.
+3. **Pin dependency checksums** — *Actions → Pin dependency checksums → Run workflow*, then
+   merge its output so tampered artifacts fail every later build.
 
 ## 3. Cutting the release
 
