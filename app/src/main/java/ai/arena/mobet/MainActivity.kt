@@ -15,6 +15,8 @@ import ai.arena.mobet.planner.RunMode
 import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.provenance.BuildIntegrity
 import ai.arena.mobet.provenance.BuildIntegrityReport
+import ai.arena.mobet.provenance.ProvenanceVerification
+import ai.arena.mobet.provenance.SigstoreProvenance
 import ai.arena.mobet.security.SecretStore
 import ai.arena.mobet.ui.JsonErrorLocator
 import ai.arena.mobet.ui.JsonHighlighter
@@ -135,6 +137,13 @@ class MainActivity : AppCompatActivity() {
         if (result.resultCode == RESULT_OK) result.data?.data?.let(::previewImport)
     }
 
+    /** Separate picker: an attestation is evidence only and can never enter workflow import. */
+    private val provenancePicker = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) result.data?.data?.let(::verifyProvenance)
+    }
+
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             intent?.getStringExtra(MobetAccessibilityService.EXTRA_STATUS)?.let { showStatus(it) }
@@ -248,6 +257,7 @@ class MainActivity : AppCompatActivity() {
                 R.id.menu_import -> { importLibrary(); true }
                 R.id.menu_reminders -> { showReminders(); true }
                 R.id.menu_build_integrity -> { showBuildIntegrity(); true }
+                R.id.menu_verify_provenance -> { pickProvenance(); true }
                 else -> false
             }
         }
@@ -741,6 +751,66 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun pickProvenance() {
+        provenancePicker.launch(
+            Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("application/json")
+        )
+    }
+
+    private fun verifyProvenance(uri: android.net.Uri) {
+        showBusy(true)
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val source = contentResolver.openInputStream(uri)?.use { input ->
+                        val output = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(16 * 1024)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            require(output.size() + count <= 1_048_576) { "Attestation bundle exceeds 1 MB" }
+                            output.write(buffer, 0, count)
+                        }
+                        output.toString(Charsets.UTF_8.name())
+                    } ?: error("Attestation bundle could not be opened")
+                    val integrity = BuildIntegrity.inspect(applicationContext)
+                    val manifest = requireNotNull(integrity.manifest) { "Capability manifest unavailable" }
+                    require(integrity.verified) { "Installed build integrity must pass first" }
+                    SigstoreProvenance.verifyInstalledApk(applicationContext, source, manifest)
+                }
+            }
+            showBusy(false)
+            if (isFinishing || isDestroyed) return@launch
+            result.onSuccess(::renderProvenance).onFailure {
+                showStatus("Provenance verification failed: ${it.message}", Tone.DANGER)
+            }
+        }
+    }
+
+    private fun renderProvenance(report: ProvenanceVerification) {
+        val sheet = MobetUi.ReportSheet(this)
+            .title("SLSA provenance", R.drawable.ic_check)
+            .subtitle("Offline Sigstore verification")
+        if (report.verified) {
+            sheet.banner("✔ Signature, trust chain, transparency evidence, identity, and APK subject verified", Tone.SUCCESS)
+            sheet.rows(listOf(
+                Row("Signer", report.signerIdentity.orEmpty(), R.drawable.ic_check, showChevron = false),
+                Row("Source", report.sourceRepository.orEmpty(), R.drawable.ic_library, showChevron = false),
+                Row("Revision", report.sourceRevision.orEmpty(), R.drawable.ic_info, showChevron = false),
+                Row("Builder", report.builderId.orEmpty(), R.drawable.ic_policy, showChevron = false)
+            ))
+        } else {
+            sheet.banner("✖ Provenance is not trusted", Tone.DANGER)
+                .paragraph(report.failures.joinToString("\n") { "• $it" })
+        }
+        sheet.paragraph(
+            "Verification uses the pinned Sigstore public-good trust root bundled with this APK. " +
+                "It performs no network request and requires the signed SLSA subject to match the installed APK bytes."
+        ).action(getString(R.string.action_close)).show()
+    }
+
     private fun showBuildIntegrity() {
         showBusy(true)
         lifecycleScope.launch {
@@ -773,7 +843,7 @@ class MainActivity : AppCompatActivity() {
             sheet.rows(
                 listOf(
                     Row("App version", "${manifest.versionName} (${manifest.versionCode}) · ${manifest.buildType}", R.drawable.ic_info, showChevron = false),
-                    Row("Build provenance", if (report.verified) "Verified offline · commit $commit" else "Consistency failure · commit $commit", R.drawable.ic_check, showChevron = false),
+                    Row("Capability identity", if (report.verified) "Package-consistent · commit $commit" else "Consistency failure · commit $commit", R.drawable.ic_check, showChevron = false),
                     Row("Signing", "${report.actualSigning} signing · manifest expects ${manifest.expectedSigning}", R.drawable.ic_policy, showChevron = false),
                     Row("Model engine", report.modelStatus, R.drawable.ic_agent, showChevron = false),
                     Row("Voice engine", report.voiceStatus, R.drawable.ic_record, showChevron = false),

@@ -191,6 +191,9 @@ dependencies {
     // (docs/FRONTIER.md pillar 1A); inference runs in system processes and the merged-manifest
     // audit still forbids any network permission landing in the app.
     implementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
+    // Offline Sigstore bundle verification. Runtime trust is loaded only from the pinned asset;
+    // sigstorePublicDefaults() is deliberately never used because Mobet has no network permission.
+    implementation("dev.sigstore:sigstore-java:2.2.0")
 
     testImplementation("junit:junit:4.13.2")
     // Real org.json implementation for JVM unit tests (the android.jar version is stubbed).
