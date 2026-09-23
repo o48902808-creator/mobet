@@ -778,7 +778,17 @@ class MainActivity : AppCompatActivity() {
                     val integrity = BuildIntegrity.inspect(applicationContext)
                     val manifest = requireNotNull(integrity.manifest) { "Capability manifest unavailable" }
                     require(integrity.verified) { "Installed build integrity must pass first" }
-                    SigstoreProvenance.verifyInstalledApk(applicationContext, source, manifest)
+                    SigstoreProvenance.verifyInstalledApk(applicationContext, source, manifest).also { report ->
+                        if (report.verified) {
+                            getSharedPreferences("build_integrity", MODE_PRIVATE).edit()
+                                .putString("verified_provenance_apk", integrity.apkSha256)
+                                .apply()
+                            AuditLedger(applicationContext).append(
+                                "SLSA provenance verified offline · APK ${integrity.shortApkDigest}… · " +
+                                    "source ${report.sourceRevision?.take(12).orEmpty()}"
+                            )
+                        }
+                    }
                 }
             }
             showBusy(false)
@@ -958,7 +968,9 @@ class MainActivity : AppCompatActivity() {
                         manifestSha256 = manifest.manifestSha256,
                         commit = manifest.commit,
                         signing = integrity.actualSigning,
-                        provenanceVerified = integrity.verified,
+                        capabilityVerified = integrity.verified,
+                        provenanceVerifiedOnDevice = getSharedPreferences("build_integrity", MODE_PRIVATE)
+                            .getString("verified_provenance_apk", null) == integrity.apkSha256,
                         policyVersion = manifest.policyVersion,
                         ledgerSchemaVersion = manifest.ledgerSchemaVersion
                     )

@@ -202,8 +202,10 @@ whole-file hash would be self-referential. No server, telemetry, or mutable web 
 
 The invariant is deliberately asymmetric: model output can improve planning, but only signed
 release provenance and deterministic local policy can establish what shipped and what may run.
-A future device-lab gate should verify the attestation, install the APK, exercise the zero-radio
-manifest check, and export a redacted ledger chain as one reproducible evidence bundle.
+The API 29 device-lab gate now installs and exercises the APK, initializes the pinned Sigstore
+trust root offline, runs the Keystore/ledger/UI suites, and emits a deterministic screenshot-free
+evidence envelope over the APK and connected-test report digests. Release bundles are published
+separately because the artifact attestation is created only after the final release APK exists.
 
 **Acceptance gates:** `actions/attest-build-provenance` succeeds; the release digest matches the
 attested subject; `unzip -t` and package metadata checks pass; the merged manifest has no radio

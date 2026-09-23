@@ -15,7 +15,8 @@ class LedgerExportTest {
         manifestSha256 = "b".repeat(64),
         commit = "abc123",
         signing = "debug",
-        provenanceVerified = true,
+        capabilityVerified = true,
+        provenanceVerifiedOnDevice = true,
         policyVersion = "deterministic-policy.v1",
         ledgerSchemaVersion = "mobet.ledger.v1/hash-chain.v2"
     )

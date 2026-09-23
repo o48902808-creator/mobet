@@ -12,7 +12,8 @@ data class LedgerBuildIdentity(
     val manifestSha256: String,
     val commit: String,
     val signing: String,
-    val provenanceVerified: Boolean,
+    val capabilityVerified: Boolean,
+    val provenanceVerifiedOnDevice: Boolean = false,
     val policyVersion: String,
     val ledgerSchemaVersion: String
 )
@@ -79,7 +80,8 @@ object LedgerExport {
                     .put("manifestSha256", build.manifestSha256)
                     .put("commit", build.commit)
                     .put("signing", build.signing)
-                    .put("provenanceVerified", build.provenanceVerified)
+                    .put("capabilityVerified", build.capabilityVerified)
+                    .put("provenanceVerifiedOnDevice", build.provenanceVerifiedOnDevice)
             )
             .put("policyVersion", build.policyVersion)
             .put("ledgerSchemaVersion", build.ledgerSchemaVersion)

@@ -46,7 +46,8 @@ def valid_bundle():
         "build": {
             "version": "0.8.0", "versionCode": 9,
             "apkSha256": "a" * 64, "manifestSha256": "b" * 64,
-            "commit": "abc123", "signing": "debug", "provenanceVerified": True,
+            "commit": "abc123", "signing": "debug",
+            "capabilityVerified": True, "provenanceVerifiedOnDevice": True,
         },
         "policyVersion": "deterministic-policy.v1",
         "ledgerSchemaVersion": "mobet.ledger.v1/hash-chain.v2",
@@ -100,10 +101,10 @@ class VerifyLedgerTest(unittest.TestCase):
         bundle["build"]["apkSha256"] = "not-a-digest"
         self.assertTrue(any("apkSha256" in item for item in verify_ledger.verify(bundle)))
 
-    def test_unverified_build_provenance_is_rejected(self):
+    def test_unverified_build_capability_is_rejected(self):
         bundle = valid_bundle()
-        bundle["build"]["provenanceVerified"] = False
-        self.assertTrue(any("build provenance" in item for item in verify_ledger.verify(bundle)))
+        bundle["build"]["capabilityVerified"] = False
+        self.assertTrue(any("capability identity" in item for item in verify_ledger.verify(bundle)))
 
     def test_extra_screenshot_payload_is_rejected(self):
         bundle = valid_bundle()

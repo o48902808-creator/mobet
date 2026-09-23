@@ -19,6 +19,12 @@ unzip -tq "$tmp/mobet.apk"
 sha256sum "$tmp/mobet.apk" # should match the hash above
 ```
 
-## Milestone 2: provenance + ledger
+## Current provenance + ledger path
 
-Release provenance pairs naturally with the existing hash-chained audit ledger. The next release-hardening increment should publish a signed SLSA provenance attestation alongside `mobet.apk`, binding the artifact digest to the immutable tag, workflow, repository, and builder identity. The release verification then checks both the APK digest and the attestation before installation; the on-device ledger records the verification result and digest so the supply-chain claim and runtime evidence share one auditable trail.
+Release CI now publishes `mobet.sigstore.json`, the exact Sigstore bundle emitted by GitHub's
+artifact-attestation action for `mobet.apk`. The app verifies that bundle offline against its pinned
+Sigstore trust root and records a digest-only success receipt in the local ledger. Portable ledger
+exports distinguish `capabilityVerified` (embedded manifest/package consistency) from
+`provenanceVerifiedOnDevice` (a successful cryptographic bundle check for the same installed APK).
+The standalone ledger verifier treats the latter as a reported boolean, not independent proof; an
+independent reviewer must verify the accompanying Sigstore bundle against the exported APK digest.

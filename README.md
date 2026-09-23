@@ -437,13 +437,12 @@ on every push.
 
 GitHub Actions (`.github/workflows/android-ci.yml`) runs both on every push and pull request and uploads test reports plus the debug APK as artifacts.
 
-## Next milestones
+## Remaining qualification work
 
-The frontier roadmap — on-device AICore planning behind the existing deterministic
-contract, per-step evidence-verified execution, bounded control flow, presence without a
-network — lives in [docs/FRONTIER.md](docs/FRONTIER.md), sequenced as 0.8 / 0.9 / 1.0 with
-per-pillar proofs and honest cost notes. Near-term operational milestones:
+The repository roadmap in [docs/FRONTIER.md](docs/FRONTIER.md) is implemented with deterministic
+JVM tests, an API 29 emulator/device-evidence gate, APK assembly, merged-manifest checks, security
+lint, and CodeQL. Production qualification still requires resources outside this repository:
 
-1. Instrumented on-device coverage for OEM-specific accessibility trees and interruption handling
-2. Signed APK pipeline plus reproducible release provenance
-3. Performance, compatibility, and accessibility hardening across real devices
+1. OEM-specific physical-device accessibility and interruption matrices
+2. Long-duration performance, battery, compatibility, and accessibility studies
+3. A production release-signing key and independently witnessed release ceremony

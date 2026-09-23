@@ -64,7 +64,9 @@ def verify(bundle: dict[str, Any]) -> list[str]:
     for field in ("version", "commit", "signing"):
         require(isinstance(build.get(field), str) and bool(build.get(field)), f"build.{field} is required", failures)
     require(isinstance(build.get("versionCode"), int), "build.versionCode must be an integer", failures)
-    require(build.get("provenanceVerified") is True, "build provenance was not verified at export", failures)
+    require(build.get("capabilityVerified") is True, "build capability identity was not verified at export", failures)
+    require(isinstance(build.get("provenanceVerifiedOnDevice"), bool),
+            "build.provenanceVerifiedOnDevice must be boolean", failures)
     for field in ("apkSha256", "manifestSha256"):
         value = build.get(field)
         require(isinstance(value, str) and bool(HEX_256.fullmatch(value)), f"build.{field} must be lowercase SHA-256", failures)
