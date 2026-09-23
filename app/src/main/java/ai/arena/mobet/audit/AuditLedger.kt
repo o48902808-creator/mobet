@@ -39,7 +39,7 @@ class AuditLedger(context: Context) {
     }
 
     @Synchronized
-    fun append(event: String) {
+    fun append(event: String): Boolean {
         val entries = load()
         val previousHash = entries.lastOrNull()?.hash ?: GENESIS
         val sequence = (entries.lastOrNull()?.sequence ?: 0L) + 1
