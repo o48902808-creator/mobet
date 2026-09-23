@@ -17,10 +17,23 @@ class MobetTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
-        startActivityAndCollapse(
-            PresenceLauncher.intent(this).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
+        val target = PresenceLauncher.intent(this).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            startActivityAndCollapse(
+                android.app.PendingIntent.getActivity(
+                    this, 0, target,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                        android.app.PendingIntent.FLAG_IMMUTABLE
+                )
+            )
+        } else {
+            launchLegacy(target)
+        }
     }
+
+    /** The only route on API 26–33; the PendingIntent overload exists from API 34. */
+    @android.annotation.SuppressLint("Deprecated")
+    private fun launchLegacy(target: Intent) = startActivityAndCollapse(target)
 
     override fun onStartListening() {
         super.onStartListening()
