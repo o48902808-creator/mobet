@@ -1076,8 +1076,12 @@ class MainActivity : AppCompatActivity() {
             )
             return
         }
+        // Gate: below 31 there is no on-device recognizer at all; from 34 the static
+        // availability check answers up front; on 31–33 the recognizer's own error path
+        // reports unsupported (mapped in onError), so the cloud fallback is never consulted.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-            !android.speech.SpeechRecognizer.isOnDeviceRecognitionSupported(this)
+            (Build.VERSION.SDK_INT >= 34 &&
+                !android.speech.SpeechRecognizer.isOnDeviceRecognitionAvailable(this))
         ) {
             showStatus(
                 "On-device speech recognition is unavailable on this device — type the goal instead",
