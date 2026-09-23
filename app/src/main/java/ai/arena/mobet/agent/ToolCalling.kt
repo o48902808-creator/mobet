@@ -11,6 +11,10 @@ data class ToolResult(val id: String, val ok: Boolean, val output: String)
 interface SafeTool {
     val name: String
     val description: String
+    val risk: ToolRisk
+        get() = ToolRisk.READ_ONLY
+    val requiresConfirmation: Boolean
+        get() = risk == ToolRisk.CONFIRM_REQUIRED
     fun validate(arguments: Map<String, String>): String? = null
     fun invoke(arguments: Map<String, String>): String
 }
@@ -19,6 +23,14 @@ class ToolRegistry(tools: List<SafeTool>) {
     private val toolsByName = tools.associateBy { it.name }
 
     fun names(): Set<String> = toolsByName.keys
+
+    fun specs(): List<ToolSpec> = toolsByName.values.map {
+        ToolSpec(it.name, it.description, it.risk, requiresConfirmation = it.requiresConfirmation)
+    }
+
+    /** Validate a proposed batch before any individual call is dispatched. */
+    fun validatePlan(calls: List<ToolCall>, confirmed: Set<String> = emptySet()): String? =
+        ToolPlanGate.validate(calls, specs(), confirmed)
 
     /** Rejects unknown tools, malformed identifiers, oversized calls, and invalid arguments. */
     fun dispatch(call: ToolCall): ToolResult {
