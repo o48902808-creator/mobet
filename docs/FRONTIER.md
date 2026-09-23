@@ -183,3 +183,28 @@ stays covered by the share-intake), so the roadmap is complete.
 The moat is the conjunction: capability at the frontier of mobile agents, with
 assurance at the frontier of verifiable software. Every pillar above strengthens
 one side without taxing the other.
+
+## Pillar 5 — Verifiable supply chain and capability proofs
+
+> **Status: provenance is now emitted by the release pipeline.** Every release build creates a
+> GitHub Artifact Attestation for the exact `mobet.apk` subject before the publish job receives
+> it. The build job has no release-write token; the publish job only checks the recorded digest
+> and publishes the already-built bytes. This makes the release a verifiable statement about
+> source, workflow, builder identity, and artifact—not merely a file attached to a tag.
+
+The next frontier is a **capability proof, not a capability claim**. A release should carry a
+machine-readable manifest containing the APK digest, commit, test suite result, merged-manifest
+permission posture, validator version, ledger format version, and attestation reference. The
+app can display this immutable build card offline, while the audit ledger records the digest and
+verification outcome at first launch. No server, telemetry, or trust in a mutable web page is
+needed.
+
+The invariant is deliberately asymmetric: model output can improve planning, but only signed
+release provenance and deterministic local policy can establish what shipped and what may run.
+A future device-lab gate should verify the attestation, install the APK, exercise the zero-radio
+manifest check, and export a redacted ledger chain as one reproducible evidence bundle.
+
+**Acceptance gates:** `actions/attest-build-provenance` succeeds; the release digest matches the
+attested subject; `unzip -t` and package metadata checks pass; the merged manifest has no radio
+permission; the JVM and device suites pass; and a tampered APK or ledger is rejected rather than
+silently repaired.
