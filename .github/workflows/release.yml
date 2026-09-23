@@ -58,6 +58,15 @@ jobs:
           mv app/build/outputs/apk/debug/app-debug.apk mobet.apk
           test -s mobet.apk
           sha256sum mobet.apk | tee mobet.apk.sha256
+          python3 - <<'PYTHON'
+          import hashlib, json, os
+          digest = hashlib.sha256(open("mobet.apk", "rb").read()).hexdigest()
+          json.dump({"schema":"mobet.capability.v1", "artifact":"mobet.apk", "sha256":digest,
+                     "commit":os.environ["GITHUB_SHA"], "workflow":os.environ["GITHUB_WORKFLOW_REF"],
+                     "invariants":["no-network-permission","deterministic-policy-authority",
+                                    "hash-chained-ledger","model-output-is-untrusted"]},
+                    open("mobet-capability.json", "w"), indent=2)
+          PYTHON
 
       - name: Generate SLSA build provenance
         uses: actions/attest-build-provenance@v2
@@ -71,6 +80,7 @@ jobs:
           path: |
             mobet.apk
             mobet.apk.sha256
+            mobet-capability.json
           if-no-files-found: error
 
   publish:

@@ -208,3 +208,18 @@ manifest check, and export a redacted ledger chain as one reproducible evidence 
 attested subject; `unzip -t` and package metadata checks pass; the merged manifest has no radio
 permission; the JVM and device suites pass; and a tampered APK or ledger is rejected rather than
 silently repaired.
+
+## Pillar 6 — Voice and safe tool calling
+
+Voice is now treated as an input modality, not an authority. Mobet uses Android's on-device
+`SpeechRecognizer` when available (with explicit microphone consent); cloud recognition is never
+a fallback. A future bundled Whisper/Vosk backend is compatible with this contract only if its
+model is shipped locally, its size and battery budget are accepted, and recognition output still
+requires review. Streaming audio must never be retained by default.
+
+The agent now has a typed `ToolCall`/`ToolRegistry` boundary. Model or voice intent can request
+only an allow-listed tool with bounded identifiers and arguments; unknown tools, malformed calls,
+and oversized payloads are rejected before dispatch. Tools return structured results and must
+still pass the existing deterministic policy before any device mutation. The initial tools are
+read-only screen description and action enumeration. This is the safe foundation for future
+calendar, file, or app-specific tools without turning natural language into arbitrary execution.
