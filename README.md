@@ -367,6 +367,11 @@ GitHub Actions (`.github/workflows/android-ci.yml`) runs both on every push and 
 
 ## Next milestones
 
+The frontier roadmap — on-device AICore planning behind the existing deterministic
+contract, per-step evidence-verified execution, bounded control flow, presence without a
+network — lives in [docs/FRONTIER.md](docs/FRONTIER.md), sequenced as 0.8 / 0.9 / 1.0 with
+per-pillar proofs and honest cost notes. Near-term operational milestones:
+
 1. Instrumented on-device coverage for OEM-specific accessibility trees and interruption handling
 2. Signed APK pipeline plus reproducible release provenance
 3. Performance, compatibility, and accessibility hardening across real devices
