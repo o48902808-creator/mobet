@@ -96,7 +96,10 @@ class LiveAndroidAgent(
         require(value.maxCycles in 1..50) { "Cycle budget must be 1–50" }
         require(AgentPlanValidator.validate(value, emptyList()).isEmpty()) { "Invalid autonomous safety budget" }
         goal = value
-        val assistant = if (value.allowModelAssistance) LocalStructuredModelAssistant() else null
+        // Pillar 1A (device-gated, off by default): the on-device model accelerates when
+        // AICore actually serves it on this hardware; the deterministic local assistant is
+        // the universal floor — graceful absence is part of the contract.
+        val assistant = if (value.allowModelAssistance) AiCoreModelAssistant.forEnabledRun() else null
         val hints = assistant?.proposeSubgoals(value)?.let(ModelOutputValidator::validateSubgoals).orEmpty()
         plan = HierarchicalPlanner.decompose(value, hints); hierarchy = plan?.let(::HierarchicalExecutor)
         deliberator = Deliberator(memory, assistant)
@@ -105,7 +108,12 @@ class LiveAndroidAgent(
         stabilizer.reset(); frames.clear(); recoveryAttempts.clear(); cancelled = false
         checkpoints.start(value)
         service.showAutonomyNotification()
-        emit("Apex autonomous run started · ${plan?.subgoals?.size} subgoals · ${value.maxCycles} cycle budget · OCR ${if (value.allowOcrEvidence) "consented" else "off"} · model ${if (value.allowModelAssistance) "local structured" else "off"}")
+        val modelEngine = when {
+            !value.allowModelAssistance -> "off"
+            assistant is AiCoreModelAssistant -> AiCoreModelAssistant.ENGINE_NAME
+            else -> "local structured"
+        }
+        emit("Apex autonomous run started · ${plan?.subgoals?.size} subgoals · ${value.maxCycles} cycle budget · OCR ${if (value.allowOcrEvidence) "consented" else "off"} · model $modelEngine")
         if (!service.launchTarget(value.allowedPackage)) finish(AgentStatus.BLOCKED, "could not launch target package")
         else handler.postDelayed(::tick, 800)
     }

@@ -16,6 +16,16 @@ declined — *declined, not deferred* ([STATE_OF_THOUGHT.md](STATE_OF_THOUGHT.md
 
 ## Pillar 1 — On-device intelligence behind the existing contract
 
+> **Status: core shipped on this branch (0.9 in flight).** `AiCoreModelAssistant` implements
+> the contract over the ML Kit GenAI Prompt API (Gemini Nano via AICore): created only for
+> model-assisted runs, created successfully only when `checkStatus()` reports the feature
+> available on this device, process-singleton, hard-capped per inference, falling back to the
+> deterministic assistant on every failure path. The gate above is satisfied: threat-model
+> section in docs/THREAT_MODEL.md, strict prompt codec (`AiCorePromptCodecTest`), and a
+> hostile-plan conformance suite (`ModelPlanConformanceTest`) proving the deterministic
+> validator rejects what a compromised model writes. Remaining in 0.9: QS tile + share-import;
+> the emulator availability matrix stays a device-lab item.
+
 **The move:** implement the `ModelAssistant` contract with **AICore (Gemini
 Nano)** — an on-device model served by the system on Pixel 8 Pro / Galaxy S24
 class hardware. The app itself still ships no model, still declares no network

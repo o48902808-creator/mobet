@@ -180,6 +180,11 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     // Bundled on-device OCR model; no network connection is required at runtime.
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    // Gemini Nano via AICore (ML Kit GenAI Prompt API — a thin client; the model lives in the
+    // AICore system app, not the APK). Used only for device-gated, opt-in model assistance
+    // (docs/FRONTIER.md pillar 1A); inference runs in system processes and the merged-manifest
+    // audit still forbids any network permission landing in the app.
+    implementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
 
     testImplementation("junit:junit:4.13.2")
     // Real org.json implementation for JVM unit tests (the android.jar version is stubbed).
