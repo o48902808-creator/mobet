@@ -52,38 +52,63 @@ The equivalent manual settings, as a fallback:
 > same process as a tap-by-tap walkthrough — merge, settings, release, install,
 > first run — designed for the GitHub mobile layout.
 
+**Prerequisite (one time):** the release signing secrets must exist, or the workflow fails
+at its first step by design. See [`docs/RELEASE_SIGNING.md`](RELEASE_SIGNING.md).
+
 The APK asset is built by *Actions → Release APK → Run workflow* (or by pushing a
-`v*` tag). The current line is **0.8.0 / versionCode 9**; the next release tag is:
+`v*` tag). The current line is **1.0.0 / versionCode 10** — the first production-signed
+release, which is why it takes the 1.0.0 tag rather than 0.9.0:
 
 ```
 workflow_dispatch: Release APK
-  tag:   v0.8.0
-  title: v0.8.0
+  tag:   v1.0.0
+  title: v1.0.0
 ```
 
-The job builds `assembleDebug`, verifies it is non-empty, records the SHA-256, and a
-separate, no-project-code publish job re-verifies the checksum before creating the
-GitHub Release with the build-log link. The `releases/latest/download/mobet.apk`
-URL above then rotates to it automatically.
+The tag does not need to exist beforehand: the publish job creates it at `--target` the
+built commit. Pushing a `v*` tag yourself triggers the same workflow.
 
-## 4. What "debug-signed" means for upgrades (read before shipping)
+The job builds `test assembleRelease` with the keystore from repository secrets, verifies
+the result with `apksigner` (rejecting unsigned APKs and the Android debug certificate,
+and pinning the signer fingerprint), records the SHA-256, builds the evidence bundle,
+rebuilds from clean for the reproducibility report, and attests the artifact with Sigstore.
+A separate, no-project-code publish job re-verifies the checksum and the signing evidence
+before creating the GitHub Release. The `releases/latest/download/mobet.apk` URL above then
+rotates to it automatically.
 
-Releases are intentionally signed with the build's debug key — no managed keystore,
-no CI secrets, by design. Debug keys are generated **per build host**, so two
-releases are not guaranteed to share a signature. Consequence for users:
+Release assets: `mobet.apk`, `mobet.apk.sha256`, `mobet-capability.json`,
+`mobet-signing.json`, `mobet-evidence.zip` (+ `.sha256`), `mobet-reproducibility.json`,
+`mobet.sigstore.json`.
 
-- **Treat every upgrade as a fresh install.** If Android reports
-  `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, uninstall the previous APK first.
-- Because `android:allowBackup="false"` is deliberate (workflow JSON may reference
-  secret names), uninstalling **destroys the saved workflow library**. Users should
-  export their library (overflow menu → *Export library*) before upgrading and
-  re-import afterwards.
+After the run, validate it independently rather than reading the log:
 
-An optional future hardening path is already wired: `app/build.gradle.kts` creates a
-real `release` signing config automatically when keystore material is provided via
-environment or `local.properties`. Switching release.yml to `assembleRelease` with
-a managed keystore is a deliberate, reviewed change — exactly the kind of decision
-this document exists to slow down, not to block.
+```sh
+bash scripts/verify-release-apk.sh --tag v1.0.0 --expect-cert <signer-fingerprint>
+```
+
+## 4. Signing and what it means for upgrades (read before shipping)
+
+From **v1.0.0** releases are signed with a managed production key held in GitHub Actions
+secrets ([`docs/RELEASE_SIGNING.md`](RELEASE_SIGNING.md)). Up to and including v0.8.0 they
+were debug-signed with a per-build-host key. Consequences:
+
+- **The v0.8.0 → v1.0.0 upgrade requires an uninstall.** The signature changes, so Android
+  reports `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Because `android:allowBackup="false"` is
+  deliberate (workflow JSON may reference secret names), uninstalling **destroys the saved
+  workflow library**. Tell users in the release notes to export their library (overflow menu
+  → *Export library*) first and re-import after. The workflow's generated notes already say
+  this.
+- **From v1.0.0 onward, updates install in place** — same key, same identity, no uninstall,
+  library preserved.
+- The key is now a top-tier secret. An in-place update inherits Mobet's accessibility grant
+  without re-consent, so key compromise is equivalent to handing over every user's screen.
+  Rotation is an emergency procedure, not maintenance; see the signing doc.
+
+There is no debug-signing fallback left in the release path. Four gates enforce it (secrets
+preflight, `MOBET_REQUIRE_RELEASE_SIGNING` in Gradle, no `signingConfigs["debug"]` assignment
+anywhere, and an independent `apksigner` check that rejects `CN=Android Debug` and pins the
+fingerprint). The last one validates the artifact rather than the intent, which is why it is
+the one that actually holds.
 
 ## 5. Rollback
 

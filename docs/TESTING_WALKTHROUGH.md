@@ -10,12 +10,14 @@ https://github.com/o48902808-creator/mobet/releases/latest/download/mobet.apk
 ```
 
 > [!IMPORTANT]
-> **Uninstall any older Mobet before installing.** Every build is signed with the
-> Android debug key, but an in-place update can fail with a signature-mismatch
-> error. Uninstalling clears Mobet's saved workflows, secrets, captures, and audit
-> ledger — export anything you want to keep first. No build machine, keystore, or
-> GitHub secrets are involved anywhere in this process: the release APK is a plain
-> `assembleDebug` build produced by CI.
+> **Coming from v0.8.0 or earlier? Uninstall it first.** Those builds were
+> debug-signed; v1.0.0 onward is production-signed, so an in-place update fails with
+> a signature-mismatch error. Uninstalling clears Mobet's saved workflows, secrets,
+> captures, and audit ledger — export anything you want to keep first. From v1.0.0
+> onward updates install in place. The release APK is an `assembleRelease` build
+> signed in CI with a keystore held in repository secrets
+> ([RELEASE_SIGNING.md](RELEASE_SIGNING.md)); verify it before installing with
+> `bash scripts/verify-release-apk.sh --tag v1.0.0`.
 
 You know you have the right build when the home screen is a Material 3 layout with a
 **Service card** on top, two labelled tile grids (**Plan & autonomy** and

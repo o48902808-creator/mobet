@@ -78,8 +78,8 @@ android {
         applicationId = "ai.arena.mobet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.8.0"
+        versionCode = 10
+        versionName = "1.0.0"
         // The whole icon set is vector drawables; no raster assets are shipped.
         vectorDrawables.useSupportLibrary = true
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -95,8 +95,14 @@ android {
      * destroys their workflow library. Supplying a real keystore keeps updates in place.
      *
      * Credentials come from environment variables (CI secrets) or local.properties, and are
-     * never committed. When absent the release build simply stays unsigned rather than
-     * silently falling back to the debug key.
+     * never committed. When absent the release build stays UNSIGNED. There is deliberately no
+     * debug-key fallback anywhere in this file: AGP only falls back to the debug signing config
+     * if one is assigned, and `release` is assigned either the real config or nothing at all.
+     *
+     * Strict mode: set MOBET_REQUIRE_RELEASE_SIGNING=true (or -Pmobet.require.release.signing=true)
+     * and a release build with incomplete signing material fails immediately instead of quietly
+     * producing app-release-unsigned.apk. The release workflow always sets it, so a publishable
+     * artifact can never be unsigned or debug-signed; local `assembleRelease` stays permissive.
      */
     val keystorePath = System.getenv("MOBET_KEYSTORE_PATH")
         ?: project.findProperty("mobet.keystore.path") as String?
@@ -111,6 +117,33 @@ android {
         !keyAliasName.isNullOrBlank() &&
         !keyPasswordValue.isNullOrBlank()
 
+    val requireReleaseSigning = (
+        System.getenv("MOBET_REQUIRE_RELEASE_SIGNING")
+            ?: project.findProperty("mobet.require.release.signing") as String?
+        )?.equals("true", ignoreCase = true) ?: false
+
+    if (requireReleaseSigning && !hasSigningMaterial) {
+        val missing = buildList {
+            if (keystorePath.isNullOrBlank()) add("MOBET_KEYSTORE_PATH")
+            if (keystorePassword.isNullOrBlank()) add("MOBET_KEYSTORE_PASSWORD")
+            if (keyAliasName.isNullOrBlank()) add("MOBET_KEY_ALIAS")
+            if (keyPasswordValue.isNullOrBlank()) add("MOBET_KEY_PASSWORD")
+        }
+        throw GradleException(
+            buildString {
+                appendLine("MOBET_REQUIRE_RELEASE_SIGNING=true but release signing material is incomplete.")
+                appendLine("Missing: ${missing.joinToString(", ")}")
+                appendLine()
+                appendLine("This guard exists so a published release can never be unsigned or")
+                appendLine("debug-signed. In CI the values come from repository secrets; see")
+                appendLine("docs/RELEASE_SIGNING.md for the one-time keystore + secrets setup.")
+            }
+        )
+    }
+    if (hasSigningMaterial && !file(keystorePath!!).exists()) {
+        throw GradleException("MOBET_KEYSTORE_PATH points at a missing file: $keystorePath")
+    }
+
     signingConfigs {
         if (hasSigningMaterial) {
             create("release") {
@@ -118,6 +151,11 @@ android {
                 storePassword = keystorePassword
                 keyAlias = keyAliasName
                 keyPassword = keyPasswordValue
+                // APK Signature Scheme v2/v3: whole-file signatures the platform verifies
+                // before installing, and what CI's apksigner check asserts are present.
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
@@ -125,9 +163,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            if (hasSigningMaterial) {
-                signingConfig = signingConfigs.getByName("release")
-            }
+            // Either the real release config, or explicitly nothing. Never signingConfigs["debug"]:
+            // a debug-signed "release" is indistinguishable from an attacker-signed build, since
+            // the debug key is public and per-host.
+            signingConfig = if (hasSigningMaterial) signingConfigs.getByName("release") else null
         }
     }
 

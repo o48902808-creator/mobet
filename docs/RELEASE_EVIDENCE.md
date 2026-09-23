@@ -14,8 +14,26 @@ envelope binds the exact emulator-built APK, pinned capability identity, API 29/
 and every connected-test report digest without embedding the reports, screenshots, or screen data.
 A SHA-256 sidecar accompanies it.
 
-Release CI also performs a clean second build and publishes `mobet-reproducibility.json` with both
-APK hashes and an honest `reproducible` or `non-reproducible` result. A mismatch is reported rather
-than hidden; it does not replace the separately attested first artifact. The evidence zip, its
-SHA-256 sidecar, capability manifest, reproducibility report, APK digest, and APK are release
-assets.
+Release CI also publishes `mobet-signing.json` (`mobet.signing.v1`): the signer certificate's
+SHA-256 and SHA-1 digests, the distinguished name, which signature schemes are present, and the
+SDK range verified. It is produced by parsing `apksigner verify --print-certs` output against the
+finished artifact, not by restating build configuration, and the publish job refuses to create a
+release unless it attests a signed, non-debug APK. Users pin the fingerprint it carries; see
+`docs/RELEASE_SIGNING.md`.
+
+Release CI also performs a clean second build and publishes `mobet-reproducibility.json`
+(`mobet.reproducibility.v2`). Signed artifacts need two honest measurements, so the report carries
+both: `firstSha256`/`secondSha256` over the whole file, and `firstContentSha256`/`secondContentSha256`
+over every APK entry except the v1 signature files (`META-INF/MANIFEST.MF`, `*.SF`, `*.RSA`, `*.DSA`,
+`*.EC`). The content digest is the one an independent rebuilder can match, because they do not hold
+the signing key; the whole-file digest additionally covers the signature block. A mismatch is
+reported rather than hidden, and neither replaces the separately attested first artifact.
+
+`scripts/verify-release-apk.sh` re-checks all of this from the downloaded bytes alone: archive
+integrity, published digest, `apksigner` signature and debug-key rejection, fingerprint pinning,
+capability manifest self-consistency and embedded/sidecar agreement, evidence-bundle binding and
+privacy flags, reproducibility status, and the Sigstore bundle's attested subject. Unavailable
+tools are reported as `SKIP` — never silently counted as passes.
+
+The evidence zip, its SHA-256 sidecar, capability manifest, signing report, reproducibility report,
+Sigstore bundle, APK digest, and APK are release assets.
