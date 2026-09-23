@@ -160,6 +160,8 @@ class WorkflowRunner(
         }
     }
 
+    fun isRunning(): Boolean = !cancelled
+
     fun confirmationResult(approved: Boolean) {
         if (!awaitingConfirmation || cancelled) return
         awaitingConfirmation = false
@@ -183,6 +185,15 @@ class WorkflowRunner(
         if ((index > 0 || enforcePackageAtFirstStep) && activePackage != null && activePackage !in flow.policy.allowedPackages) {
             finish("Package boundary blocked action in $activePackage")
             return
+        }
+        activePackage?.let { packageName ->
+            flow.policy.packageVersions[packageName]?.let { required ->
+                val actual = service.appVersion(packageName)
+                if (actual != required) {
+                    finish("App version boundary blocked $packageName: required $required, found ${actual ?: "unknown"}")
+                    return
+                }
+            }
         }
         observeScreen(flow)
         if (cancelled) return
@@ -223,6 +234,9 @@ class WorkflowRunner(
         }
         val approved = nextActionApproved
         if (step.action != "confirm") nextActionApproved = false
+        if (step.action !in ControlFlow.CONTROL_ACTIONS && step.action !in setOf("wait", "delay", "confirm", "ocrwait")) {
+            service.noteAutomatedAction()
+        }
         when (step.action) {
             // Cross-app switching. The destination was validated against policy.allowedPackages
             // by PlanValidator; it is re-checked here so a mutated plan cannot widen the boundary

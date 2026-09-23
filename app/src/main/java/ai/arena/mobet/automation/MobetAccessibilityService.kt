@@ -19,6 +19,7 @@ class MobetAccessibilityService : AccessibilityService() {
     private var lastInspectionAt = 0L
     @Volatile private var snapshot: ScreenSnapshot? = null
     @Volatile private var latestTimeline: ExecutionTimelineEvent? = null
+    @Volatile private var lastAutomatedActionAt = 0L
 
     override fun onServiceConnected() {
         instance = this
@@ -27,9 +28,25 @@ class MobetAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
+        val now = android.os.SystemClock.uptimeMillis()
+        val userActionEvent = event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
+            event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED
+        val runActive = runner?.isRunning() == true || liveAgent.isRunning()
+        if (userActionEvent && runActive && now - lastAutomatedActionAt > USER_INTERVENTION_GRACE_MS) {
+            emit("Safety stop: user intervention detected")
+            liveAgent.cancel("User intervention detected")
+            runner?.cancel("User intervention detected")
+            return
+        }
         if (recorder.observe(event)) emit("Recorded interaction")
         val eventPackage = event.packageName?.toString() ?: return
-        val now = android.os.SystemClock.uptimeMillis()
+        if (runActive && eventPackage in SECURE_SYSTEM_PACKAGES) {
+            emit("Safety stop: secure or permission surface detected ($eventPackage)")
+            liveAgent.cancel("Secure system surface detected")
+            runner?.cancel("Secure system surface detected")
+            return
+        }
+
         if (eventPackage != packageName && now - lastInspectionAt >= 700) {
             rootInActiveWindow?.let { root ->
                 try { snapshot = ScreenInspector.inspect(root, eventPackage) }
@@ -91,6 +108,10 @@ class MobetAccessibilityService : AccessibilityService() {
     }
 
     internal fun stopGuardedExecution() = runner?.cancel("Guarded action stopped")
+
+    internal fun noteAutomatedAction() {
+        lastAutomatedActionAt = android.os.SystemClock.uptimeMillis()
+    }
 
     fun startRecording() {
         liveAgent.cancel("Recording started", quiet = true)
@@ -368,6 +389,12 @@ class MobetAccessibilityService : AccessibilityService() {
         const val EXTRA_CONFIRM_HARDENED = "confirm_hardened"
         private const val AUTONOMY_CHANNEL = "apex-active-run"
         private const val AUTONOMY_NOTIFICATION_ID = 4890
+        private const val USER_INTERVENTION_GRACE_MS = 1_500L
+        private val SECURE_SYSTEM_PACKAGES = setOf(
+            "com.android.systemui",
+            "com.android.permissioncontroller",
+            "com.google.android.permissioncontroller"
+        )
         @Volatile var instance: MobetAccessibilityService? = null
             private set
     }

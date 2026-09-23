@@ -156,6 +156,8 @@ class LiveAndroidAgent(
         else handler.postDelayed(::tick, 800)
     }
 
+    fun isRunning(): Boolean = !cancelled
+
     fun cancel(reason: String = "Autonomous run stopped", quiet: Boolean = false) {
         val wasActive = !cancelled
         if (wasActive) service.stopGuardedExecution()
