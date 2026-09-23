@@ -1,5 +1,8 @@
 package ai.arena.mobet.automation
 
+import ai.arena.mobet.agent.ScreenFingerprint
+import ai.arena.mobet.policy.RiskEngine
+import ai.arena.mobet.policy.RiskTier
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -25,7 +28,7 @@ import java.io.File
 object WorkflowTransfer {
 
     const val FORMAT = "mobet.workflow-bundle"
-    const val VERSION = 1
+    const val VERSION = 2
     private const val LIBRARY = "library"
 
     /** Directory the FileProvider is scoped to. Nothing else is shareable. */
@@ -52,12 +55,32 @@ object WorkflowTransfer {
                 skipped++
                 return@forEach
             }
-            workflows.put(JSONObject().put("name", name).put("workflow", parsed))
+            val canonical = canonicalJson(parsed)
+            val typed = runCatching { Workflow.parse(canonical) }.getOrNull()
+            if (typed == null) {
+                skipped++
+                return@forEach
+            }
+            val highestRisk = typed.steps.maxOfOrNull { RiskEngine.assess(it).tier.ordinal } ?: 0
+            workflows.put(
+                JSONObject()
+                    .put("name", name)
+                    .put("bundleVersion", 1)
+                    .put("author", "Local Mobet user")
+                    .put("contentHash", ScreenFingerprint.sha256(canonical))
+                    .put("requiredPackages", JSONArray(typed.policy.allowedPackages.sorted()))
+                    .put("requiredPermissions", JSONArray())
+                    .put("risk", RiskTier.entries[highestRisk].name.lowercase())
+                    .put("networkDependent", false)
+                    .put("signature", JSONObject.NULL)
+                    .put("workflow", parsed)
+            )
         }
         return JSONObject()
             .put("format", FORMAT)
             .put("version", VERSION)
             .put("exportedAt", System.currentTimeMillis())
+            .put("hashAlgorithm", "SHA-256(canonical workflow JSON UTF-8)")
             .put("count", workflows.length())
             .apply { if (skipped > 0) put("skippedUnparseable", skipped) }
             .put("workflows", workflows)
@@ -90,10 +113,24 @@ object WorkflowTransfer {
 
     // ── Import ───────────────────────────────────────────────────────────────
 
-    data class ImportedWorkflow(val name: String, val source: String, val valid: Boolean, val detail: String)
+    data class ImportedWorkflow(
+        val name: String,
+        val source: String,
+        val valid: Boolean,
+        val detail: String,
+        val contentHashVerified: Boolean = false,
+        val signed: Boolean = false,
+        val risk: String = "unknown",
+        val requiredPackages: Int = 0,
+        val confirmations: Int = 0
+    )
 
     data class ImportResult(val workflows: List<ImportedWorkflow>, val bundleVersion: Int) {
         val validCount: Int get() = workflows.count(ImportedWorkflow::valid)
+        val packageCount: Int get() = workflows.filter(ImportedWorkflow::valid).sumOf { it.requiredPackages }
+        val confirmationCount: Int get() = workflows.filter(ImportedWorkflow::valid).sumOf { it.confirmations }
+        val unsignedCount: Int get() = workflows.filter { it.valid && !it.signed }.size
+        val allHashesVerified: Boolean get() = workflows.filter(ImportedWorkflow::valid).all { it.contentHashVerified }
     }
 
     /**
@@ -123,11 +160,62 @@ object WorkflowTransfer {
                 val name = item.optString("name").takeIf { it.isNotBlank() }
                     ?: body.optString("name").takeIf { it.isNotBlank() }
                     ?: "Imported ${i + 1}"
-                add(validate(name, body.toString(2)))
+                val canonical = canonicalJson(body)
+                val expectedHash = item.optString("contentHash")
+                val hashVerified = expectedHash.isNotBlank() &&
+                    expectedHash == ScreenFingerprint.sha256(canonical)
+                val signatureVerified = verifySignature(item.optJSONObject("signature"), canonical)
+                val validated = validate(name, body.toString(2))
+                val typed = runCatching { Workflow.parse(canonical) }.getOrNull()
+                val confirmations = typed?.steps?.count { it.action == "confirm" } ?: 0
+                val packages = typed?.policy?.allowedPackages?.size ?: 0
+                add(
+                    validated.copy(
+                        valid = validated.valid && (version < 2 || hashVerified),
+                        detail = when {
+                            version >= 2 && !hashVerified -> "Content hash mismatch — quarantined"
+                            else -> validated.detail + " · hash ${if (hashVerified) "verified" else "legacy"}" +
+                                " · ${if (signatureVerified) "signature verified" else "unsigned"}"
+                        },
+                        contentHashVerified = hashVerified,
+                        signed = signatureVerified,
+                        risk = item.optString("risk", "unknown"),
+                        requiredPackages = packages,
+                        confirmations = confirmations
+                    )
+                )
             }
         }
         require(entries.isNotEmpty()) { "Bundle contains no readable workflows" }
         ImportResult(entries, version)
+    }
+
+    private fun canonicalJson(value: Any?): String = when (value) {
+        null, JSONObject.NULL -> "null"
+        is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(",", "{", "}") { key ->
+            JSONObject.quote(key) + ":" + canonicalJson(value.get(key))
+        }
+        is JSONArray -> (0 until value.length()).joinToString(",", "[", "]") { canonicalJson(value.get(it)) }
+        is String -> JSONObject.quote(value)
+        is Boolean, is Number -> value.toString()
+        else -> JSONObject.quote(value.toString())
+    }
+
+    private fun verifySignature(signature: JSONObject?, canonical: String): Boolean {
+        signature ?: return false
+        if (signature.optString("algorithm") != "SHA256withECDSA") return false
+        return runCatching {
+            val publicBytes = android.util.Base64.decode(signature.getString("publicKey"), android.util.Base64.DEFAULT)
+            val value = android.util.Base64.decode(signature.getString("value"), android.util.Base64.DEFAULT)
+            val key = java.security.KeyFactory.getInstance("EC").generatePublic(
+                java.security.spec.X509EncodedKeySpec(publicBytes)
+            )
+            java.security.Signature.getInstance("SHA256withECDSA").run {
+                initVerify(key)
+                update(canonical.toByteArray(Charsets.UTF_8))
+                verify(value)
+            }
+        }.getOrDefault(false)
     }
 
     /** Parses one workflow, recording why it failed rather than throwing the whole import away. */

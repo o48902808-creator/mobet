@@ -1618,8 +1618,15 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val sheet = MobetUi.ReportSheet(this)
-            .title("Import workflows", R.drawable.ic_library)
-            .subtitle("${result.validCount} of ${result.workflows.size} ready to import")
+            .title("Workflow quarantine report", R.drawable.ic_library)
+            .subtitle("${result.validCount} of ${result.workflows.size} eligible for import")
+            .monospace(
+                "Targets: ${result.packageCount} package declarations\n" +
+                    "Confirmations: ${result.confirmationCount}\n" +
+                    "Unsigned workflows: ${result.unsignedCount}\n" +
+                    "Content hashes: ${if (result.allHashesVerified) "verified" else "legacy or failed"}\n" +
+                    "Network-dependent steps: none supported"
+            )
         if (result.validCount < result.workflows.size) {
             sheet.banner("⚠ ${result.workflows.size - result.validCount} entr" +
                 "${if (result.workflows.size - result.validCount == 1) "y" else "ies"} " +
