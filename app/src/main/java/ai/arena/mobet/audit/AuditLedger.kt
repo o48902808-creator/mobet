@@ -29,6 +29,7 @@ data class LedgerEntry(
 class AuditLedger(context: Context) {
     private val secureStore = EncryptedStateStore(context, "audit_ledger_v2")
     private val highWaterStore = EncryptedStateStore(context, "audit_ledger_high_water")
+    private val deviceRunStore = EncryptedStateStore(context, "audit_ledger_device_run")
     private val legacyPreferences = context.getSharedPreferences("audit_ledger", Context.MODE_PRIVATE)
 
     init {
@@ -57,6 +58,17 @@ class AuditLedger(context: Context) {
 
     @Synchronized
     fun entries(): List<LedgerEntry> = load()
+
+    /**
+     * Opaque installation-local identifier for correlating exports without exposing a device ID.
+     * It deliberately survives ledger clearing: it identifies this installation, not one chain.
+     */
+    @Synchronized
+    fun deviceRunId(): String {
+        deviceRunStore.read()?.takeIf { DEVICE_RUN_PATTERN.matches(it) }?.let { return it }
+        val generated = java.util.UUID.randomUUID().toString()
+        return if (deviceRunStore.write(generated)) generated else "ephemeral-$generated"
+    }
 
     /** Returns null when the chain is intact, otherwise a description of the first broken link. */
     @Synchronized
@@ -162,5 +174,6 @@ class AuditLedger(context: Context) {
     private companion object {
         const val GENESIS = "mobet-genesis"
         const val MAX_ENTRIES = 300
+        val DEVICE_RUN_PATTERN = Regex("(?:ephemeral-)?[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
     }
 }

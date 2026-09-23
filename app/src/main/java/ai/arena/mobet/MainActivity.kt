@@ -6,6 +6,8 @@ import ai.arena.mobet.automation.RunReminder
 import ai.arena.mobet.automation.Workflow
 import ai.arena.mobet.automation.WorkflowTransfer
 import ai.arena.mobet.audit.AuditLedger
+import ai.arena.mobet.audit.LedgerBuildIdentity
+import ai.arena.mobet.audit.LedgerExport
 import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.provenance.BuildIntegrity
 import ai.arena.mobet.provenance.BuildIntegrityReport
@@ -797,10 +799,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showAuditLedger() {
-        val service = MobetAccessibilityService.instance ?: run {
-            requireService(); return
-        }
-        val ledger = service.auditLedger()
+        // Ledger inspection and export do not require Accessibility to be enabled. Using the same
+        // encrypted store directly also exposes the first-launch build-verification event before
+        // the automation service has ever started.
+        val ledger = MobetAccessibilityService.instance?.auditLedger()
+            ?: AuditLedger(applicationContext)
         val verification = ledger.verify()
         val entries = ledger.entries()
         val format = SimpleDateFormat("MM-dd HH:mm:ss", Locale.US)
@@ -824,6 +827,9 @@ class MainActivity : AppCompatActivity() {
             sheet.monospace(entries.takeLast(60).joinToString("\n") {
                 "#${it.sequence} ${format.format(Date(it.timestamp))}  ${it.event}\n    ⛓ ${it.hash.take(16)}…"
             })
+            sheet.action("Export evidence", primary = true) {
+                exportAuditLedger(ledger)
+            }
             sheet.action(getString(R.string.action_clear), destructive = true) {
                 confirmDestructive(
                     "Clear the audit ledger?",
@@ -836,6 +842,62 @@ class MainActivity : AppCompatActivity() {
             }
         }
         sheet.action(getString(R.string.action_close)).show()
+    }
+
+    /** Creates and shares a redacted evidence bundle without exposing ledger storage directly. */
+    private fun exportAuditLedger(ledger: AuditLedger) {
+        showBusy(true)
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    // Keep verification and snapshot under one monitor so a runner append cannot
+                    // land between them and make the exported source verdict stale.
+                    val (entries, sourceVerified) = synchronized(ledger) {
+                        ledger.entries() to (ledger.verify() == null)
+                    }
+                    val integrity = BuildIntegrity.inspect(applicationContext)
+                    val manifest = requireNotNull(integrity.manifest) {
+                        "The embedded build manifest is unavailable"
+                    }
+                    require(integrity.apkSha256.isNotBlank()) { "The installed APK digest is unavailable" }
+                    val identity = LedgerBuildIdentity(
+                        version = manifest.versionName,
+                        versionCode = manifest.versionCode,
+                        apkSha256 = integrity.apkSha256,
+                        manifestSha256 = manifest.manifestSha256,
+                        commit = manifest.commit,
+                        signing = integrity.actualSigning,
+                        provenanceVerified = integrity.verified,
+                        policyVersion = manifest.policyVersion,
+                        ledgerSchemaVersion = manifest.ledgerSchemaVersion
+                    )
+                    val bundle = LedgerExport.json(
+                        entries = entries,
+                        deviceRun = ledger.deviceRunId(),
+                        build = identity,
+                        sourceVerified = sourceVerified
+                    )
+                    val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                    WorkflowTransfer.writeShareable(
+                        applicationContext,
+                        bundle,
+                        "mobet-ledger-$stamp.json"
+                    )
+                }
+            }
+            showBusy(false)
+            if (isFinishing || isDestroyed) return@launch
+            result.onSuccess { uri ->
+                runCatching {
+                    startActivity(
+                        Intent.createChooser(
+                            WorkflowTransfer.shareIntent(uri, "Mobet ledger evidence"),
+                            "Export audit evidence"
+                        )
+                    )
+                }.onFailure { showStatus("Could not share ledger: ${it.message}", Tone.DANGER) }
+            }.onFailure { showStatus("Could not export ledger: ${it.message}", Tone.DANGER) }
+        }
     }
 
     private fun showAgentMemory() {

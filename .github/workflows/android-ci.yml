@@ -30,6 +30,9 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      - name: Test standalone ledger verifier
+        run: python3 scripts/test_verify_ledger.py
+
       # The repository intentionally omits the Gradle wrapper JAR; CI pins Gradle itself.
       - name: Run deterministic unit tests
         id: tests
