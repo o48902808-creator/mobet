@@ -16,8 +16,19 @@ OS package manager or Gradle toolchain manager.
 
 Mobet is an Android-first, on-device mobile automation prototype. It uses Android's Accessibility API to locate controls and run explicit JSON workflows that the phone owner starts.
 
-## Frontier capabilities (v0.7.0)
+## Frontier capabilities (v0.8.0)
 
+- **User-visible build integrity** — every APK embeds a canonical capability manifest with version, source commit, workflow, attestation reference, signing expectation, engine declarations, and policy/ledger versions. Mobet verifies it against the installed package offline, computes the APK SHA-256, and records the first-launch verdict in the hash-chained ledger.
+- **Independently verifiable ledger exports** — the app exports a screenshot-free, secret-redacted evidence bundle containing build and policy identity, the original ledger head, and a portable hash chain over the exact exported events. A standard-library Python utility verifies it without Mobet.
+- **Visual execution timeline** — workflows and autonomous goals expose their current goal, subgoal, structural screen fingerprint, selected action, confidence, evidence, risk, policy verdict, recovery, and terminal reason through bounded typed events in the Activity card.
+- **Risk-authorized tool boundary** — every tool declares typed input/output schemas, package scope, risk, confirmation requirements, and autonomous eligibility. Dispatch revalidates authority and writes redacted arguments, policy decisions, confirmation outcomes, and result digests to the ledger.
+- **Offline voice-engine abstraction** — Android on-device recognition, optional local PCM model packs, and explicit unavailability share one coroutine boundary. There is no cloud fallback; local buffers are zeroed and transcripts remain editable, non-authoritative input.
+- **Intent-to-plan preview** — typed and reviewed voice goals become package-bound structured goals with fixed budgets and halt conditions. Explain and Dry-run modes have no device effects; execution requires a separate explicit tap.
+- **Reversible recovery planning** — autonomous actions record before/after fingerprints, reversal availability and outcome, retries, and recovery cost. A deterministic strategy orders wait, repair, modal dismissal, backtrack, replan, ask, and abstain; destructive failures are never blindly retried.
+- **Runtime app boundaries** — workflows can bind allowlisted packages to exact installed versions; every action rechecks package and version. Unattributed user clicks/scrolls, permission surfaces, System UI, accessibility interruption, and unexpected package transitions stop the run.
+- **Offline workflow bundles** — v2 bundles are hash-addressed canonical JSON with author, package, permission, risk, network, and optional ECDSA signature metadata. Imports remain quarantined until hash, signature, parser, and policy reports are shown; import never executes.
+- **Release evidence** — release CI emits a deterministic screenshot-free evidence envelope, SLSA provenance reference, APK/capability hashes, and an honest two-build reproducibility report as separate release assets.
+- **Offline SLSA verification** — imported Sigstore bundles are checked in-app against a pinned public-good trust root, exact GitHub workflow identity, DSSE/Sigstore transparency evidence, installed APK digest, SLSA v1 source, commit, workflow, and builder claims.
 - **Device-reliability layer** — autonomous decisions require structurally settled observation quorums with strict sample deadlines. Resource governance blocks new operations under severe thermal pressure or critically low battery, while generation-scoped callbacks eliminate lifecycle races.
 - **Executable hierarchy and probabilistic planning** — subgoals now run through an explicit state machine whose preconditions and completion evidence advance only after observed transitions. Bayesian learned-route reliability, bounded beam-style lookahead, reversible-action utility, and local replanning cooperate under hard budgets.
 - **Consent-controlled multimodal perception** — the run dialog can opt into on-device OCR for completion evidence. OCR is source-attributed, confidence-gated, temporally fused, requires repeated observations, is never persisted, and never creates tap authority; accessibility remains canonical.
@@ -426,13 +437,12 @@ on every push.
 
 GitHub Actions (`.github/workflows/android-ci.yml`) runs both on every push and pull request and uploads test reports plus the debug APK as artifacts.
 
-## Next milestones
+## Remaining qualification work
 
-The frontier roadmap — on-device AICore planning behind the existing deterministic
-contract, per-step evidence-verified execution, bounded control flow, presence without a
-network — lives in [docs/FRONTIER.md](docs/FRONTIER.md), sequenced as 0.8 / 0.9 / 1.0 with
-per-pillar proofs and honest cost notes. Near-term operational milestones:
+The repository roadmap in [docs/FRONTIER.md](docs/FRONTIER.md) is implemented with deterministic
+JVM tests, an API 29 emulator/device-evidence gate, APK assembly, merged-manifest checks, security
+lint, and CodeQL. Production qualification still requires resources outside this repository:
 
-1. Instrumented on-device coverage for OEM-specific accessibility trees and interruption handling
-2. Signed APK pipeline plus reproducible release provenance
-3. Performance, compatibility, and accessibility hardening across real devices
+1. OEM-specific physical-device accessibility and interruption matrices
+2. Long-duration performance, battery, compatibility, and accessibility studies
+3. A production release-signing key and independently witnessed release ceremony

@@ -19,6 +19,11 @@ The Accessibility Service is the privileged boundary. The activity parses locall
 - `RiskEngine` (policy): deterministic, explainable per-step risk scoring; the single source of truth for what counts as consequential, destructive, financial, or credential-sensitive.
 - `FuzzyText` / `SelectorResolver` (agent): typo- and paraphrase-tolerant matching plus guarded self-healing with confidence floor, ambiguity margin, and abstention.
 - `ScreenFingerprint` / `WorldModel` (agent): order-insensitive structural screen hashes, Jaccard screen similarity, and the bounded on-device transition graph.
+- `ExecutionTimelineEvent` (automation/UI): bounded typed live explanations covering goal, screen, action, evidence, risk, policy, recovery, and terminal reason; package-scoped and non-authoritative.
+- `ToolRegistry` / `ToolPlanGate` (agent): schema-typed tools with package, risk, confirmation, and autonomous-execution authorization repeated at dispatch; every outcome crosses a mandatory redacted audit sink.
+- `VoiceEngine` (voice): offline-only transcription boundary with Android on-device, optional local PCM model-pack, and unavailable implementations; transcripts remain non-authoritative review input.
+- `IntentToPlanPipeline` / `AgentPlanPreview` (planner): normalized package-bound goals, hard execution budgets, Explain/Dry-run/Execute modes, and explicit halt conditions before autonomous authority is granted.
+- `ActionSnapshot` / `RecoveryPlanner` (agent): before/after structural evidence, explicit reversal receipts and recovery costs, plus deterministic wait→repair→dismiss→backtrack→replan→ask→abstain selection.
 - `AuditLedger` (audit): SHA-256 hash-chained, tamper-evident, bounded execution history with full-chain verification.
 - `AutonomousAgent` / `LiveAndroidAgent` (agent): bounded observe–deliberate–act–verify controllers. The live controller owns no accessibility nodes: it submits typed actions back through a freshly validated one-action `WorkflowRunner` and verifies a new snapshot afterward.
 - `AccessibilityObservationAdapter`: converts node-free snapshots to observations/actions, assigns structural action IDs, and maps selected actions back to typed workflow steps.

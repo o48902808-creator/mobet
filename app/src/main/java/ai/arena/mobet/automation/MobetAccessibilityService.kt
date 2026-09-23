@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 
 class MobetAccessibilityService : AccessibilityService() {
     private var runner: WorkflowRunner? = null
@@ -13,9 +14,13 @@ class MobetAccessibilityService : AccessibilityService() {
     private val ledger by lazy { ai.arena.mobet.audit.AuditLedger(this) }
     private val worldModel by lazy { ai.arena.mobet.agent.WorldModel(this) }
     private val agentMemory by lazy { ai.arena.mobet.agent.PersistentExperienceStore(this) }
-    private val liveAgent by lazy { ai.arena.mobet.agent.LiveAndroidAgent(this, agentMemory, ::emit) }
+    private val liveAgent by lazy {
+        ai.arena.mobet.agent.LiveAndroidAgent(this, agentMemory, ::emit, ::emitTimeline)
+    }
     private var lastInspectionAt = 0L
     @Volatile private var snapshot: ScreenSnapshot? = null
+    @Volatile private var latestTimeline: ExecutionTimelineEvent? = null
+    @Volatile private var lastAutomatedActionAt = 0L
 
     override fun onServiceConnected() {
         instance = this
@@ -24,9 +29,25 @@ class MobetAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
+        val now = android.os.SystemClock.uptimeMillis()
+        val userActionEvent = event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
+            event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED
+        val runActive = runner?.isRunning() == true || liveAgent.isRunning()
+        if (userActionEvent && runActive && now - lastAutomatedActionAt > USER_INTERVENTION_GRACE_MS) {
+            emit("Safety stop: user intervention detected")
+            liveAgent.cancel("User intervention detected")
+            runner?.cancel("User intervention detected")
+            return
+        }
         if (recorder.observe(event)) emit("Recorded interaction")
         val eventPackage = event.packageName?.toString() ?: return
-        val now = android.os.SystemClock.uptimeMillis()
+        if (runActive && eventPackage in SECURE_SYSTEM_PACKAGES) {
+            emit("Safety stop: secure or permission surface detected ($eventPackage)")
+            liveAgent.cancel("Secure system surface detected")
+            runner?.cancel("Secure system surface detected")
+            return
+        }
+
         if (eventPackage != packageName && now - lastInspectionAt >= 700) {
             rootInActiveWindow?.let { root ->
                 try { snapshot = ScreenInspector.inspect(root, eventPackage) }
@@ -47,7 +68,7 @@ class MobetAccessibilityService : AccessibilityService() {
     fun run(workflow: Workflow) {
         liveAgent.cancel("Autonomous run replaced by workflow", quiet = true)
         runner?.cancel("Replaced by a new run")
-        runner = WorkflowRunner(this, ::emit).also { it.start(workflow) }
+        runner = WorkflowRunner(this, ::emit, emitTimeline = ::emitTimeline).also { it.start(workflow) }
     }
 
     fun startAutonomous(goal: ai.arena.mobet.agent.AgentGoal) {
@@ -88,6 +109,36 @@ class MobetAccessibilityService : AccessibilityService() {
     }
 
     internal fun stopGuardedExecution() = runner?.cancel("Guarded action stopped")
+
+    internal fun noteAutomatedAction() {
+        lastAutomatedActionAt = android.os.SystemClock.uptimeMillis()
+    }
+
+    /**
+     * Fail-closed inspection of all interactive windows, not just rootInActiveWindow. Accessibility
+     * overlays and system windows can otherwise obscure a valid target while preserving its root.
+     * Input methods are allowed because text entry legitimately opens them; Mobet never owns or
+     * creates an accessibility overlay.
+     */
+    internal fun unsafeSurfaceReason(allowedPackages: Set<String>): String? {
+        val observed = windows.orEmpty().map { window ->
+            val owner = window.root?.let { root ->
+                try { root.packageName?.toString() } finally { root.recycle() }
+            }
+            SurfaceWindow(
+                kind = when (window.type) {
+                    AccessibilityWindowInfo.TYPE_APPLICATION -> SurfaceWindow.Kind.APPLICATION
+                    AccessibilityWindowInfo.TYPE_INPUT_METHOD -> SurfaceWindow.Kind.INPUT_METHOD
+                    AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> SurfaceWindow.Kind.ACCESSIBILITY_OVERLAY
+                    AccessibilityWindowInfo.TYPE_SYSTEM -> SurfaceWindow.Kind.SYSTEM
+                    else -> SurfaceWindow.Kind.OTHER
+                },
+                ownerPackage = owner,
+                active = window.isActive
+            )
+        }
+        return SurfaceBoundary.unsafeReason(observed, allowedPackages, packageName, SECURE_SYSTEM_PACKAGES)
+    }
 
     fun startRecording() {
         liveAgent.cancel("Recording started", quiet = true)
@@ -243,6 +294,20 @@ class MobetAccessibilityService : AccessibilityService() {
     } catch (_: Exception) { null }
 
     /**
+     * Snapshot-bound read-only tools. Construction requires an audit sink, so every attempted
+     * dispatch—allowed or denied—produces a redacted hash-chained ledger event.
+     */
+    fun currentToolRegistry(): ai.arena.mobet.agent.ToolRegistry? = currentSnapshot()?.let { live ->
+        val observation = ai.arena.mobet.agent.AccessibilityObservationAdapter.adapt(
+            live,
+            appVersion(live.packageName)
+        )
+        ai.arena.mobet.agent.SafeTools.forObservation(observation) { record ->
+            check(ledger.append(record.ledgerEvent())) { "Tool audit ledger write failed" }
+        }
+    }
+
+    /**
      * Non-bypassable action gateway used by the live agent. Risk is recomputed from the translated
      * step; AgentAction.risk is never trusted. WorkflowRunner remains the sole device executor.
      */
@@ -322,6 +387,16 @@ class MobetAccessibilityService : AccessibilityService() {
         return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
 
+    private fun emitTimeline(event: ExecutionTimelineEvent) {
+        latestTimeline = event
+        sendBroadcast(
+            Intent(ACTION_STATUS).setPackage(packageName)
+                .putExtra(EXTRA_TIMELINE, event.toJson())
+        )
+    }
+
+    fun currentTimeline(): ExecutionTimelineEvent? = latestTimeline
+
     private fun emit(message: String) {
         val preferences = getSharedPreferences("diagnostics", MODE_PRIVATE)
         val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
@@ -336,10 +411,17 @@ class MobetAccessibilityService : AccessibilityService() {
         const val ACTION_STATUS = "ai.arena.mobet.STATUS"
         const val ACTION_CONFIRM = "ai.arena.mobet.CONFIRM"
         const val EXTRA_STATUS = "status"
+        const val EXTRA_TIMELINE = "timeline"
         const val EXTRA_CONFIRM_MESSAGE = "confirm_message"
         const val EXTRA_CONFIRM_HARDENED = "confirm_hardened"
         private const val AUTONOMY_CHANNEL = "apex-active-run"
         private const val AUTONOMY_NOTIFICATION_ID = 4890
+        private const val USER_INTERVENTION_GRACE_MS = 1_500L
+        private val SECURE_SYSTEM_PACKAGES = setOf(
+            "com.android.systemui",
+            "com.android.permissioncontroller",
+            "com.google.android.permissioncontroller"
+        )
         @Volatile var instance: MobetAccessibilityService? = null
             private set
     }

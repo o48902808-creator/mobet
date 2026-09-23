@@ -8,7 +8,9 @@ data class AutomationPolicy(
     val maxActions: Int,
     val maxRuntimeMs: Long,
     val allowVisualFallbacks: Boolean,
-    val allowSelfHealing: Boolean = false
+    val allowSelfHealing: Boolean = false,
+    /** Optional exact app-version bindings checked again before every action. */
+    val packageVersions: Map<String, String> = emptyMap()
 ) {
     companion object {
         val DEFAULT_ACTIONS = setOf(
@@ -40,6 +42,9 @@ object PlanValidator {
             add(PolicyViolation(null, "Target package is not in policy.allowedPackages"))
         if (workflow.steps.size > policy.maxActions)
             add(PolicyViolation(null, "Plan has ${workflow.steps.size} actions; limit is ${policy.maxActions}"))
+        policy.packageVersions.keys.filterNot(policy.allowedPackages::contains).forEach {
+            add(PolicyViolation(null, "Version-bound package $it is not in policy.allowedPackages"))
+        }
 
         // Control-flow jump table, computed once for the whole plan. Duplicate labels would
         // make a goto ambiguous, so they are violations wherever the label sits.

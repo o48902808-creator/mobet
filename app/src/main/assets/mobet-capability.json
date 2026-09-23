@@ -1,0 +1,22 @@
+{
+  "schema": "mobet.capability.v1",
+  "applicationId": "ai.arena.mobet",
+  "versionName": "0.8.0",
+  "versionCode": 9,
+  "buildType": "debug",
+  "expectedSigning": "debug",
+  "commit": "development",
+  "workflow": "local-build",
+  "attestation": "unavailable",
+  "policyVersion": "deterministic-policy.v1",
+  "ledgerSchemaVersion": "mobet.ledger.v1/hash-chain.v2",
+  "modelEngine": "AICore Gemini Nano (optional) + deterministic local fallback",
+  "voiceEngine": "Offline VoiceEngine: Android on-device + optional local model pack",
+  "invariants": [
+    "no-network-permission",
+    "deterministic-policy-authority",
+    "hash-chained-ledger",
+    "model-output-is-untrusted"
+  ],
+  "manifestSha256": "c20bf976ed8c2c067b4a6ec0393d17c1fae1ec6fd9b16c3cb97a680718be3703"
+}

@@ -151,7 +151,8 @@ data class Workflow(
                 maxActions = policyJson.optInt("maxActions", 50).coerceIn(1, 200),
                 maxRuntimeMs = policyJson.optLong("maxRuntimeMs", 120_000).coerceIn(5_000, 900_000),
                 allowVisualFallbacks = policyJson.optBoolean("allowVisualFallbacks", false),
-                allowSelfHealing = policyJson.optBoolean("allowSelfHealing", false)
+                allowSelfHealing = policyJson.optBoolean("allowSelfHealing", false),
+                packageVersions = stringMap(policyJson, "packageVersions")
             )
             return Workflow(
                 name = root.optString("name", "Untitled workflow"),
@@ -194,6 +195,20 @@ data class Workflow(
         private fun stringSet(objectValue: JSONObject, key: String, fallback: Set<String>): Set<String> {
             val array = objectValue.optJSONArray(key) ?: return fallback
             return buildSet { for (i in 0 until array.length()) add(array.getString(i)) }
+        }
+
+        private fun stringMap(objectValue: JSONObject, key: String): Map<String, String> {
+            val map = objectValue.optJSONObject(key) ?: return emptyMap()
+            require(map.length() <= 20) { "$key exceeds 20 entries" }
+            return buildMap {
+                map.keys().forEach { packageName ->
+                    val version = map.getString(packageName).trim()
+                    require(packageName.isNotBlank() && version.isNotBlank()) {
+                        "$key entries require non-empty package and version"
+                    }
+                    put(packageName, version)
+                }
+            }
         }
 
         /** Hard parse-time bounds; see the comments at their enforcement points. */

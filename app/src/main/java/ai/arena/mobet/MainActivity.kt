@@ -1,11 +1,22 @@
 package ai.arena.mobet
 
+import ai.arena.mobet.automation.ExecutionTimelineEvent
 import ai.arena.mobet.automation.MobetAccessibilityService
 import ai.arena.mobet.automation.PresenceLauncher
 import ai.arena.mobet.automation.RunReminder
 import ai.arena.mobet.automation.Workflow
 import ai.arena.mobet.automation.WorkflowTransfer
+import ai.arena.mobet.audit.AuditLedger
+import ai.arena.mobet.audit.LedgerBuildIdentity
+import ai.arena.mobet.audit.LedgerExport
+import ai.arena.mobet.planner.IntentSource
+import ai.arena.mobet.planner.IntentToPlanPipeline
+import ai.arena.mobet.planner.RunMode
 import ai.arena.mobet.policy.PlanValidator
+import ai.arena.mobet.provenance.BuildIntegrity
+import ai.arena.mobet.provenance.BuildIntegrityReport
+import ai.arena.mobet.provenance.ProvenanceVerification
+import ai.arena.mobet.provenance.SigstoreProvenance
 import ai.arena.mobet.security.SecretStore
 import ai.arena.mobet.ui.JsonErrorLocator
 import ai.arena.mobet.ui.JsonHighlighter
@@ -13,6 +24,8 @@ import ai.arena.mobet.ui.MobetUi
 import ai.arena.mobet.ui.MobetUi.Row
 import ai.arena.mobet.ui.MobetUi.Tone
 import ai.arena.mobet.ui.MobetUi.dp
+import ai.arena.mobet.voice.AudioInput
+import ai.arena.mobet.voice.VoiceEngines
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -33,6 +46,7 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -43,6 +57,10 @@ import com.google.android.material.card.MaterialCardView
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.progressindicator.CircularProgressIndicator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -70,6 +88,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var editor: EditText
     private lateinit var workflowSummary: ChipGroup
     private lateinit var runProgress: CircularProgressIndicator
+    private lateinit var timelinePanel: View
+    private lateinit var timelineState: TextView
+    private lateinit var timelineGoal: TextView
+    private lateinit var timelineStep: TextView
+    private lateinit var timelineDetail: TextView
 
     /** Rolling in-memory log so the activity card shows history, not just the newest line. */
     private val activityLog = ArrayDeque<String>()
@@ -114,9 +137,19 @@ class MainActivity : AppCompatActivity() {
         if (result.resultCode == RESULT_OK) result.data?.data?.let(::previewImport)
     }
 
+    /** Separate picker: an attestation is evidence only and can never enter workflow import. */
+    private val provenancePicker = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) result.data?.data?.let(::verifyProvenance)
+    }
+
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             intent?.getStringExtra(MobetAccessibilityService.EXTRA_STATUS)?.let { showStatus(it) }
+            intent?.getStringExtra(MobetAccessibilityService.EXTRA_TIMELINE)?.let { source ->
+                runCatching { ExecutionTimelineEvent.parse(source) }.onSuccess(::renderTimeline)
+            }
             refreshServiceState()
         }
     }
@@ -143,6 +176,7 @@ class MainActivity : AppCompatActivity() {
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
         handleServiceIntent(intent)
+        verifyAndRecordBuildOnFirstLaunch()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -154,6 +188,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshServiceState()
+        MobetAccessibilityService.instance?.currentTimeline()?.let(::renderTimeline)
     }
 
     /**
@@ -189,8 +224,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         summaryHandler.removeCallbacks(summaryTask)
         unregisterReceiver(receiver)
-        speechRecognizer?.destroy()
-        speechRecognizer = null
+        voiceJob?.cancel()
+        voiceJob = null
         super.onDestroy()
     }
 
@@ -206,6 +241,11 @@ class MainActivity : AppCompatActivity() {
         editor = findViewById(R.id.editor)
         workflowSummary = findViewById(R.id.workflowSummary)
         runProgress = findViewById(R.id.runProgress)
+        timelinePanel = findViewById(R.id.timelinePanel)
+        timelineState = findViewById(R.id.timelineState)
+        timelineGoal = findViewById(R.id.timelineGoal)
+        timelineStep = findViewById(R.id.timelineStep)
+        timelineDetail = findViewById(R.id.timelineDetail)
 
         status.movementMethod = ScrollingMovementMethod()
         status.text = getString(R.string.status_ready)
@@ -216,6 +256,8 @@ class MainActivity : AppCompatActivity() {
                 R.id.menu_export -> { exportLibrary(); true }
                 R.id.menu_import -> { importLibrary(); true }
                 R.id.menu_reminders -> { showReminders(); true }
+                R.id.menu_build_integrity -> { showBuildIntegrity(); true }
+                R.id.menu_verify_provenance -> { pickProvenance(); true }
                 else -> false
             }
         }
@@ -682,7 +724,158 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── Diagnostics, ledger, memory ──────────────────────────────────────────
+    // ── Build provenance, diagnostics, ledger, memory ───────────────────────
+
+    /**
+     * Verifies immutable build metadata and records one result per embedded manifest digest.
+     * APK hashing runs off the main thread because release artifacts can be tens of megabytes.
+     */
+    private fun verifyAndRecordBuildOnFirstLaunch() {
+        lifecycleScope.launch {
+            val report = withContext(Dispatchers.IO) {
+                runCatching { BuildIntegrity.inspect(applicationContext) }.getOrNull()
+            } ?: return@launch
+            val manifest = report.manifest ?: return@launch
+            val marker = manifest.manifestSha256
+            val preferences = getSharedPreferences("build_integrity", MODE_PRIVATE)
+            if (preferences.getString("recorded_manifest", null) == marker) return@launch
+
+            val event = if (report.verified) {
+                "Build verified: v${manifest.versionName} · SHA-256 ${report.shortApkDigest}… · " +
+                    "zero-network invariant"
+            } else {
+                "Build verification failed: v${manifest.versionName} · ${report.failures.joinToString("; ")}"
+            }
+            val stored = withContext(Dispatchers.IO) { AuditLedger(applicationContext).append(event) }
+            if (stored) preferences.edit().putString("recorded_manifest", marker).apply()
+        }
+    }
+
+    private fun pickProvenance() {
+        provenancePicker.launch(
+            Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("application/json")
+        )
+    }
+
+    private fun verifyProvenance(uri: android.net.Uri) {
+        showBusy(true)
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val source = contentResolver.openInputStream(uri)?.use { input ->
+                        val output = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(16 * 1024)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            require(output.size() + count <= 1_048_576) { "Attestation bundle exceeds 1 MB" }
+                            output.write(buffer, 0, count)
+                        }
+                        output.toString(Charsets.UTF_8.name())
+                    } ?: error("Attestation bundle could not be opened")
+                    val integrity = BuildIntegrity.inspect(applicationContext)
+                    val manifest = requireNotNull(integrity.manifest) { "Capability manifest unavailable" }
+                    require(integrity.verified) { "Installed build integrity must pass first" }
+                    SigstoreProvenance.verifyInstalledApk(applicationContext, source, manifest).also { report ->
+                        if (report.verified) {
+                            getSharedPreferences("build_integrity", MODE_PRIVATE).edit()
+                                .putString("verified_provenance_apk", integrity.apkSha256)
+                                .apply()
+                            AuditLedger(applicationContext).append(
+                                "SLSA provenance verified offline · APK ${integrity.shortApkDigest}… · " +
+                                    "source ${report.sourceRevision?.take(12).orEmpty()}"
+                            )
+                        }
+                    }
+                }
+            }
+            showBusy(false)
+            if (isFinishing || isDestroyed) return@launch
+            result.onSuccess(::renderProvenance).onFailure {
+                showStatus("Provenance verification failed: ${it.message}", Tone.DANGER)
+            }
+        }
+    }
+
+    private fun renderProvenance(report: ProvenanceVerification) {
+        val sheet = MobetUi.ReportSheet(this)
+            .title("SLSA provenance", R.drawable.ic_check)
+            .subtitle("Offline Sigstore verification")
+        if (report.verified) {
+            sheet.banner("✔ Signature, trust chain, transparency evidence, identity, and APK subject verified", Tone.SUCCESS)
+            sheet.rows(listOf(
+                Row("Signer", report.signerIdentity.orEmpty(), R.drawable.ic_check, showChevron = false),
+                Row("Source", report.sourceRepository.orEmpty(), R.drawable.ic_library, showChevron = false),
+                Row("Revision", report.sourceRevision.orEmpty(), R.drawable.ic_info, showChevron = false),
+                Row("Builder", report.builderId.orEmpty(), R.drawable.ic_policy, showChevron = false)
+            ))
+        } else {
+            sheet.banner("✖ Provenance is not trusted", Tone.DANGER)
+                .paragraph(report.failures.joinToString("\n") { "• $it" })
+        }
+        sheet.paragraph(
+            "Verification uses the pinned Sigstore public-good trust root bundled with this APK. " +
+                "It performs no network request and requires the signed SLSA subject to match the installed APK bytes."
+        ).action(getString(R.string.action_close)).show()
+    }
+
+    private fun showBuildIntegrity() {
+        showBusy(true)
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { BuildIntegrity.inspect(applicationContext) }
+            }
+            showBusy(false)
+            if (isFinishing || isDestroyed) return@launch
+            result.onSuccess(::renderBuildIntegrity).onFailure {
+                showStatus("Build verification failed: ${it.message}", Tone.DANGER)
+            }
+        }
+    }
+
+    private fun renderBuildIntegrity(report: BuildIntegrityReport) {
+        val manifest = report.manifest
+        val sheet = MobetUi.ReportSheet(this)
+            .title("Build integrity", R.drawable.ic_check)
+            .subtitle("Offline package and provenance verification")
+
+        if (report.verified) {
+            sheet.banner("✔ Build manifest and installed package are consistent", Tone.SUCCESS)
+        } else {
+            sheet.banner("✖ Integrity verification failed", Tone.DANGER)
+            sheet.paragraph(report.failures.joinToString("\n") { "• $it" })
+        }
+
+        if (manifest != null) {
+            val commit = manifest.commit.let { if (it.length > 12) it.take(12) else it }
+            sheet.rows(
+                listOf(
+                    Row("App version", "${manifest.versionName} (${manifest.versionCode}) · ${manifest.buildType}", R.drawable.ic_info, showChevron = false),
+                    Row("Capability identity", if (report.verified) "Package-consistent · commit $commit" else "Consistency failure · commit $commit", R.drawable.ic_check, showChevron = false),
+                    Row("Signing", "${report.actualSigning} signing · manifest expects ${manifest.expectedSigning}", R.drawable.ic_policy, showChevron = false),
+                    Row("Model engine", report.modelStatus, R.drawable.ic_agent, showChevron = false),
+                    Row("Voice engine", report.voiceStatus, R.drawable.ic_record, showChevron = false),
+                    Row("Policy version", manifest.policyVersion, R.drawable.ic_policy, showChevron = false),
+                    Row("Ledger schema", manifest.ledgerSchemaVersion, R.drawable.ic_ledger, showChevron = false),
+                    Row("Workflow", manifest.workflow, R.drawable.ic_diagnostics, showChevron = false),
+                    Row("Attestation reference", manifest.attestation, R.drawable.ic_check, showChevron = false)
+                )
+            )
+        }
+        sheet.paragraph(
+            "Installed APK SHA-256 (computed locally from the package bytes):"
+        ).monospace(report.apkSha256.ifBlank { "unavailable" })
+            .paragraph(
+                "The embedded manifest authenticates its canonical payload and is checked against " +
+                    "the installed app ID, version, signing certificate, declared permissions, and " +
+                    "required safety invariants. The APK computes its own final digest because a " +
+                    "file cannot embed its final whole-file hash without changing that hash."
+            )
+            .action(getString(R.string.action_close))
+            .show()
+    }
 
     private fun showDiagnostics() {
         val service = MobetAccessibilityService.instance
@@ -707,10 +900,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showAuditLedger() {
-        val service = MobetAccessibilityService.instance ?: run {
-            requireService(); return
-        }
-        val ledger = service.auditLedger()
+        // Ledger inspection and export do not require Accessibility to be enabled. Using the same
+        // encrypted store directly also exposes the first-launch build-verification event before
+        // the automation service has ever started.
+        val ledger = MobetAccessibilityService.instance?.auditLedger()
+            ?: AuditLedger(applicationContext)
         val verification = ledger.verify()
         val entries = ledger.entries()
         val format = SimpleDateFormat("MM-dd HH:mm:ss", Locale.US)
@@ -734,6 +928,9 @@ class MainActivity : AppCompatActivity() {
             sheet.monospace(entries.takeLast(60).joinToString("\n") {
                 "#${it.sequence} ${format.format(Date(it.timestamp))}  ${it.event}\n    ⛓ ${it.hash.take(16)}…"
             })
+            sheet.action("Export evidence", primary = true) {
+                exportAuditLedger(ledger)
+            }
             sheet.action(getString(R.string.action_clear), destructive = true) {
                 confirmDestructive(
                     "Clear the audit ledger?",
@@ -746,6 +943,64 @@ class MainActivity : AppCompatActivity() {
             }
         }
         sheet.action(getString(R.string.action_close)).show()
+    }
+
+    /** Creates and shares a redacted evidence bundle without exposing ledger storage directly. */
+    private fun exportAuditLedger(ledger: AuditLedger) {
+        showBusy(true)
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    // Keep verification and snapshot under one monitor so a runner append cannot
+                    // land between them and make the exported source verdict stale.
+                    val (entries, sourceVerified) = synchronized(ledger) {
+                        ledger.entries() to (ledger.verify() == null)
+                    }
+                    val integrity = BuildIntegrity.inspect(applicationContext)
+                    val manifest = requireNotNull(integrity.manifest) {
+                        "The embedded build manifest is unavailable"
+                    }
+                    require(integrity.apkSha256.isNotBlank()) { "The installed APK digest is unavailable" }
+                    val identity = LedgerBuildIdentity(
+                        version = manifest.versionName,
+                        versionCode = manifest.versionCode,
+                        apkSha256 = integrity.apkSha256,
+                        manifestSha256 = manifest.manifestSha256,
+                        commit = manifest.commit,
+                        signing = integrity.actualSigning,
+                        capabilityVerified = integrity.verified,
+                        provenanceVerifiedOnDevice = getSharedPreferences("build_integrity", MODE_PRIVATE)
+                            .getString("verified_provenance_apk", null) == integrity.apkSha256,
+                        policyVersion = manifest.policyVersion,
+                        ledgerSchemaVersion = manifest.ledgerSchemaVersion
+                    )
+                    val bundle = LedgerExport.json(
+                        entries = entries,
+                        deviceRun = ledger.deviceRunId(),
+                        build = identity,
+                        sourceVerified = sourceVerified
+                    )
+                    val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                    WorkflowTransfer.writeShareable(
+                        applicationContext,
+                        bundle,
+                        "mobet-ledger-$stamp.json"
+                    )
+                }
+            }
+            showBusy(false)
+            if (isFinishing || isDestroyed) return@launch
+            result.onSuccess { uri ->
+                runCatching {
+                    startActivity(
+                        Intent.createChooser(
+                            WorkflowTransfer.shareIntent(uri, "Mobet ledger evidence"),
+                            "Export audit evidence"
+                        )
+                    )
+                }.onFailure { showStatus("Could not share ledger: ${it.message}", Tone.DANGER) }
+            }.onFailure { showStatus("Could not export ledger: ${it.message}", Tone.DANGER) }
+        }
     }
 
     private fun showAgentMemory() {
@@ -1014,6 +1269,7 @@ class MainActivity : AppCompatActivity() {
         val evidence = MobetUi.Field(this, "Completion evidence", "Exact on-screen text, e.g. Internet")
         val ocr = MobetUi.checkBox(this, "Consent to on-device OCR for completion evidence")
         val model = MobetUi.checkBox(this, "Use structured on-device candidate ranking")
+        var voiceTranscriptReviewed = false
 
         MobetUi.dialog(this)
             .setTitle("Bounded autonomous run")
@@ -1026,20 +1282,16 @@ class MainActivity : AppCompatActivity() {
             )
             .setView(MobetUi.formContainer(this, goal.layout, evidence.layout, ocr, model))
             .setNeutralButton("🎙 Dictate") { _, _ -> }
-            .setPositiveButton("Start run") { _, _ ->
-                if (goal.value.isBlank() || evidence.value.isBlank()) {
-                    showStatus("Goal and exact completion evidence are required", Tone.DANGER)
-                } else {
-                    showBusy(true)
-                    service.startAutonomous(
-                        ai.arena.mobet.agent.AgentGoal(
-                            goal.value, evidence.value, snapshot.packageName,
-                            maxCycles = 20, maxRisk = 29, minConfidence = 0.67,
-                            lookaheadExpansions = 32,
-                            allowOcrEvidence = ocr.isChecked,
-                            allowModelAssistance = model.isChecked
-                        )
-                    )
+            .setPositiveButton("Preview plan") { _, _ ->
+                IntentToPlanPipeline.prepare(
+                    goal.value,
+                    evidence.value,
+                    snapshot.packageName,
+                    if (voiceTranscriptReviewed) IntentSource.VOICE_TRANSCRIPT else IntentSource.TYPED
+                ).onSuccess { preview ->
+                    showAutonomousPlanPreview(preview, ocr.isChecked, model.isChecked, service)
+                }.onFailure {
+                    showStatus("Goal rejected: ${it.message}", Tone.DANGER)
                 }
             }
             .setNegativeButton(R.string.action_cancel, null)
@@ -1049,23 +1301,51 @@ class MainActivity : AppCompatActivity() {
                 // dismiss it. The transcript lands IN the field — dictation is an input
                 // method, never execution authority (docs/THREAT_MODEL.md).
                 getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                    dictateGoal(goal)
+                    dictateGoal(goal) { voiceTranscriptReviewed = true }
                 }
             }
     }
 
+    private fun showAutonomousPlanPreview(
+        preview: ai.arena.mobet.planner.AgentPlanPreview,
+        allowOcr: Boolean,
+        allowModel: Boolean,
+        service: MobetAccessibilityService
+    ) {
+        MobetUi.ReportSheet(this)
+            .title("Execution plan", R.drawable.ic_plan)
+            .subtitle("Explain mode · no device actions have run")
+            .banner("Review required before execution", Tone.WARNING)
+            .monospace(preview.explanation(RunMode.EXPLAIN))
+            .paragraph(
+                "On-device OCR: ${if (allowOcr) "consented" else "off"}\n" +
+                    "Model assistance: ${if (allowModel) "enabled as an untrusted proposer" else "off"}\n\n" +
+                    "The candidate route is selected from fresh accessibility observations at " +
+                    "runtime. Every action is revalidated before execution."
+            )
+            .action("Dry run") {
+                MobetUi.ReportSheet(this)
+                    .title("Autonomous dry run", R.drawable.ic_dryrun)
+                    .subtitle("Simulation only · the device was not touched")
+                    .monospace(preview.explanation(RunMode.DRY_RUN))
+                    .action(getString(R.string.action_close))
+                    .show()
+            }
+            .action("Execute", primary = true) {
+                showBusy(true)
+                service.startAutonomous(preview.asAgentGoal(allowOcr, allowModel))
+            }
+            .action(getString(R.string.action_cancel))
+            .show()
+    }
+
     // ── Voice goals (1.0; RECORD_AUDIO, on-device only) ─────────────────────
 
-    private var speechRecognizer: android.speech.SpeechRecognizer? = null
+    private var voiceJob: Job? = null
     private var dictationDialog: androidx.appcompat.app.AlertDialog? = null
 
-    /**
-     * Voice goals, gated as docs/FRONTIER.md demands: off by default (nothing happens until
-     * the user taps Dictate), the only microphone use is an *on-device* recognizer (the cloud
-     * fallback is refused, not used), and the transcript is placed in the goal field for the
-     * user to review and edit — it never starts a run by itself.
-     */
-    private fun dictateGoal(target: MobetUi.Field) {
+    /** Voice is an input method only: explicit permission, offline engine, editable transcript. */
+    private fun dictateGoal(target: MobetUi.Field, onTranscriptReady: () -> Unit = {}) {
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
             android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {
@@ -1076,90 +1356,53 @@ class MainActivity : AppCompatActivity() {
             )
             return
         }
-        // Gate: below 31 there is no on-device recognizer at all; from 34 the static
-        // availability check answers up front; on 31–33 the recognizer's own error path
-        // reports unsupported (mapped in onError), so the cloud fallback is never consulted.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-            (Build.VERSION.SDK_INT >= 34 &&
-                !android.speech.SpeechRecognizer.isOnDeviceRecognitionAvailable(this))
-        ) {
-            showStatus(
-                "On-device speech recognition is unavailable on this device — type the goal instead",
-                Tone.WARNING
-            )
+        val engine = VoiceEngines.select(applicationContext)
+        if (!engine.isAvailable) {
+            showStatus("No offline voice engine is available — type the goal instead", Tone.WARNING)
             return
         }
-        startDictation(target)
-    }
-
-    private fun startDictation(target: MobetUi.Field) {
-        // Lint-visible guard (the caller already gates): the on-device recognizer exists
-        // from API 31, and NewApi tracking does not cross method boundaries.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        speechRecognizer?.destroy()
-        val recognizer = android.speech.SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-        speechRecognizer = recognizer
+        voiceJob?.cancel()
         val dialog = MobetUi.dialog(this)
             .setTitle("Listening")
             .setIcon(R.drawable.ic_record)
-            .setMessage("Speak the goal.\n\nRecognized entirely on this device.")
+            .setMessage("Speak the goal.\n\nRecognized entirely on this device; audio is not retained.")
             .setNegativeButton(R.string.action_cancel, null)
             .show()
-        dialog.setOnDismissListener {
-            speechRecognizer?.destroy()
-            speechRecognizer = null
-            dictationDialog = null
-        }
         dictationDialog = dialog
-
-        recognizer.setRecognitionListener(object : android.speech.RecognitionListener {
-            override fun onResults(results: Bundle) {
-                val heard = results
-                    .getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull().orEmpty().trim()
+        dialog.setOnDismissListener {
+            if (dictationDialog === dialog) {
+                voiceJob?.cancel()
+                voiceJob = null
+                dictationDialog = null
+            }
+        }
+        voiceJob = lifecycleScope.launch {
+            runCatching {
+                engine.transcribe(AudioInput.Microphone { partial ->
+                    if (!isFinishing && !isDestroyed) {
+                        dialog.setMessage("Speak the goal.\n\n${partial.take(500)}")
+                    }
+                })
+            }.onSuccess { transcript ->
+                // Dismiss first so its cancellation hook cannot affect a later session.
+                dictationDialog = null
                 dialog.dismiss()
-                if (heard.isEmpty()) showStatus("Did not catch that — try again", Tone.WARNING)
-                else {
-                    target.input.setText(heard)
-                    target.input.setSelection(heard.length)
-                    showStatus("Heard “$heard” — review it, then start the run", Tone.SUCCESS)
-                }
-            }
-
-            override fun onPartialResults(partialResults: Bundle) {
-                val partial = partialResults
-                    .getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull().orEmpty()
-                if (partial.isNotBlank()) dictationDialog?.setMessage("Speak the goal.\n\n$partial")
-            }
-
-            override fun onError(error: Int) {
-                dialog.dismiss()
-                val why = when (error) {
-                    android.speech.SpeechRecognizer.ERROR_NO_MATCH,
-                    android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech recognized"
-                    android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
-                        "Microphone permission missing"
-                    else -> "Recognition unavailable right now"
-                }
-                showStatus("$why — type the goal instead", Tone.WARNING)
-            }
-
-            override fun onReadyForSpeech(params: Bundle?) = Unit
-            override fun onBeginningOfSpeech() = Unit
-            override fun onRmsChanged(rmsdB: Float) = Unit
-            override fun onBufferReceived(buffer: ByteArray?) = Unit
-            override fun onEndOfSpeech() = Unit
-            override fun onEvent(eventType: Int, params: Bundle?) = Unit
-        })
-        recognizer.startListening(
-            android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                .putExtra(
-                    android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                target.input.setText(transcript.text)
+                target.input.setSelection(transcript.text.length)
+                onTranscriptReady()
+                // Never echo transcript text into diagnostics or the persistent ledger.
+                showStatus(
+                    "Offline transcript ready — review and edit it before starting the run",
+                    Tone.SUCCESS
                 )
-                .putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        )
+            }.onFailure { error ->
+                if (error is kotlinx.coroutines.CancellationException) return@onFailure
+                dictationDialog = null
+                dialog.dismiss()
+                showStatus("${error.message ?: "Recognition unavailable"} — type the goal instead", Tone.WARNING)
+            }
+            voiceJob = null
+        }
     }
 
     override fun onRequestPermissionsResult(
@@ -1457,8 +1700,15 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val sheet = MobetUi.ReportSheet(this)
-            .title("Import workflows", R.drawable.ic_library)
-            .subtitle("${result.validCount} of ${result.workflows.size} ready to import")
+            .title("Workflow quarantine report", R.drawable.ic_library)
+            .subtitle("${result.validCount} of ${result.workflows.size} eligible for import")
+            .monospace(
+                "Targets: ${result.packageCount} package declarations\n" +
+                    "Confirmations: ${result.confirmationCount}\n" +
+                    "Unsigned workflows: ${result.unsignedCount}\n" +
+                    "Content hashes: ${if (result.allHashesVerified) "verified" else "legacy or failed"}\n" +
+                    "Network-dependent steps: none supported"
+            )
         if (result.validCount < result.workflows.size) {
             sheet.banner("⚠ ${result.workflows.size - result.validCount} entr" +
                 "${if (result.workflows.size - result.validCount == 1) "y" else "ies"} " +
@@ -1796,6 +2046,49 @@ class MainActivity : AppCompatActivity() {
     private fun applyServiceColor(color: Int) {
         serviceDot.background?.mutate()?.let { DrawableCompat.setTint(it, color) }
         serviceState.setTextColor(color)
+    }
+
+    private fun renderTimeline(event: ExecutionTimelineEvent) {
+        timelinePanel.visibility = View.VISIBLE
+        timelineState.text = "${event.state.name} · ${event.mode.uppercase(Locale.US)}"
+        timelineState.setTextColor(
+            ContextCompat.getColor(
+                this,
+                when (event.state) {
+                    ExecutionTimelineEvent.State.SUCCEEDED -> R.color.mobet_success
+                    ExecutionTimelineEvent.State.HALTED -> R.color.mobet_danger
+                    ExecutionTimelineEvent.State.WAITING,
+                    ExecutionTimelineEvent.State.RECOVERING -> R.color.mobet_warning
+                    else -> R.color.mobet_primary
+                }
+            )
+        )
+        timelineGoal.text = "Goal: ${event.goal}"
+        timelineStep.text = buildString {
+            if (event.step != null) {
+                append("Step ").append(event.step)
+                event.totalSteps?.let { append(" of ").append(it) }
+            } else append("Preparing run")
+            event.subgoal?.let { append("\nSubgoal: ").append(it) }
+            event.action?.let { append("\nAction: ").append(it) }
+        }
+        timelineDetail.text = buildList {
+            event.screenFingerprint?.let { add("Screen      $it") }
+            event.confidence?.let { add("Confidence  $it%") }
+            event.risk?.let { add("Risk        $it") }
+            event.evidence?.let { add("Evidence    $it") }
+            event.policy?.let { add("Policy      $it") }
+            event.recovery?.let { add("Recovery    $it") }
+            event.stopReason?.let { add("Stopped     $it") }
+        }.joinToString("\n")
+        showBusy(
+            event.state in setOf(
+                ExecutionTimelineEvent.State.PLANNING,
+                ExecutionTimelineEvent.State.RUNNING,
+                ExecutionTimelineEvent.State.WAITING,
+                ExecutionTimelineEvent.State.RECOVERING
+            )
+        )
     }
 
     private fun showBusy(busy: Boolean) {

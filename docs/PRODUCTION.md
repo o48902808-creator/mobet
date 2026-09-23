@@ -53,13 +53,12 @@ The equivalent manual settings, as a fallback:
 > first run — designed for the GitHub mobile layout.
 
 The APK asset is built by *Actions → Release APK → Run workflow* (or by pushing a
-`v*` tag). Version stays **0.7.0 / versionCode 8** for this line; the next release
-tag is therefore:
+`v*` tag). The current line is **0.8.0 / versionCode 9**; the next release tag is:
 
 ```
 workflow_dispatch: Release APK
-  tag:   v0.7.0
-  title: v0.7.0
+  tag:   v0.8.0
+  title: v0.8.0
 ```
 
 The job builds `assembleDebug`, verifies it is non-empty, records the SHA-256, and a

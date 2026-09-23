@@ -64,6 +64,8 @@
     <string name="action_export">Export workflows…</string>
     <string name="action_import">Import workflows…</string>
     <string name="action_reminders">Run reminders…</string>
+    <string name="action_build_integrity">Build integrity</string>
+    <string name="action_verify_provenance">Verify SLSA provenance</string>
     <string name="action_help">How Mobet works</string>
     <string name="picker_search_hint">Search</string>
     <string name="picker_no_matches">No matches</string>

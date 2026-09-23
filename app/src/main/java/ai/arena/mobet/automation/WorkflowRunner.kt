@@ -28,7 +28,8 @@ class WorkflowRunner(
     private val emitLog: (String) -> Unit,
     private val onFinished: ((Boolean, String) -> Unit)? = null,
     private val launchTarget: Boolean = true,
-    private val enforcePackageAtFirstStep: Boolean = false
+    private val enforcePackageAtFirstStep: Boolean = false,
+    private val emitTimeline: (ExecutionTimelineEvent) -> Unit = {}
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val secrets = SecretStore(service)
@@ -79,6 +80,33 @@ class WorkflowRunner(
      */
     private fun log(message: String) = emitLog(redact(message))
 
+    private fun timeline(
+        state: ExecutionTimelineEvent.State,
+        step: Step? = null,
+        risk: RiskAssessment? = null,
+        recovery: String? = null,
+        stopReason: String? = null
+    ) {
+        val flow = workflow ?: return
+        emitTimeline(
+            ExecutionTimelineEvent(
+                state = state,
+                mode = "Workflow",
+                goal = flow.name,
+                subgoal = step?.label,
+                step = if (step == null) null else index + 1,
+                totalSteps = flow.steps.size,
+                screenFingerprint = lastFingerprint,
+                action = step?.action,
+                evidence = step?.timelineEvidence(),
+                risk = risk?.let { "${it.tier.name.lowercase()} · score ${it.score}" },
+                policy = if (risk == null) "PlanValidator approved" else "Allowed by deterministic policy",
+                recovery = recovery,
+                stopReason = stopReason
+            )
+        )
+    }
+
     private fun redact(message: String): String {
         if (resolvedSecrets.isEmpty()) return message
         var output = message
@@ -90,6 +118,7 @@ class WorkflowRunner(
     }
 
     fun start(value: Workflow) {
+        workflow = value
         val violations = PlanValidator.validate(value)
         if (violations.isNotEmpty()) {
             finish("Policy rejected plan: " + violations.joinToString("; ") {
@@ -97,9 +126,9 @@ class WorkflowRunner(
             })
             return
         }
-        workflow = value
         controlFlow = ControlFlow(value.steps)
         startedAt = SystemClock.uptimeMillis()
+        timeline(ExecutionTimelineEvent.State.PLANNING)
         val elevated = value.steps.count { riskOf(it, value.variables).tier >= RiskTier.ELEVATED }
         log(
             "Policy approved “${value.name}” (${value.steps.size}/${value.policy.maxActions} actions, " +
@@ -120,11 +149,18 @@ class WorkflowRunner(
         val safe = redact(reason)
         resolvedSecrets.clear()
         emitLog(safe)
+        timeline(
+            ExecutionTimelineEvent.State.HALTED,
+            workflow?.steps?.getOrNull(index),
+            stopReason = safe
+        )
         if (!completionDelivered) {
             completionDelivered = true
             onFinished?.invoke(false, safe)
         }
     }
+
+    fun isRunning(): Boolean = !cancelled
 
     fun confirmationResult(approved: Boolean) {
         if (!awaitingConfirmation || cancelled) return
@@ -145,10 +181,23 @@ class WorkflowRunner(
             finish("Runtime budget exceeded (${flow.policy.maxRuntimeMs} ms)")
             return
         }
+        service.unsafeSurfaceReason(flow.policy.allowedPackages)?.let { reason ->
+            finish("Surface boundary blocked action: $reason")
+            return
+        }
         val activePackage = service.activePackageName()
         if ((index > 0 || enforcePackageAtFirstStep) && activePackage != null && activePackage !in flow.policy.allowedPackages) {
             finish("Package boundary blocked action in $activePackage")
             return
+        }
+        activePackage?.let { packageName ->
+            flow.policy.packageVersions[packageName]?.let { required ->
+                val actual = service.appVersion(packageName)
+                if (actual != required) {
+                    finish("App version boundary blocked $packageName: required $required, found ${actual ?: "unknown"}")
+                    return
+                }
+            }
         }
         observeScreen(flow)
         if (cancelled) return
@@ -172,6 +221,7 @@ class WorkflowRunner(
         val riskNote = if (risk.tier >= RiskTier.ELEVATED)
             " · risk ${risk.tier.name.lowercase()} (${risk.reasons.joinToString(", ")})" else ""
         log("Step ${index + 1}/${flow.steps.size}: ${step.action}$riskNote")
+        timeline(ExecutionTimelineEvent.State.RUNNING, step, risk)
         // Arm the post-step evidence check against the *expanded* step, so `{{var:…}}` text in
         // the expect block reads back with the same substitutions the action itself used.
         pendingExpectation = step.expect?.let { index to step }
@@ -188,6 +238,9 @@ class WorkflowRunner(
         }
         val approved = nextActionApproved
         if (step.action != "confirm") nextActionApproved = false
+        if (step.action !in ControlFlow.CONTROL_ACTIONS && step.action !in setOf("wait", "delay", "confirm", "ocrwait")) {
+            service.noteAutomatedAction()
+        }
         when (step.action) {
             // Cross-app switching. The destination was validated against policy.allowedPackages
             // by PlanValidator; it is re-checked here so a mutated plan cannot widen the boundary
@@ -302,6 +355,12 @@ class WorkflowRunner(
                 // answer; awaitingConfirmation would otherwise pin this run in "Waiting for
                 // confirmation" forever, with the runtime budget powerless because it is only
                 // checked between steps. An unanswered gate expires into a denial.
+                timeline(
+                    ExecutionTimelineEvent.State.WAITING,
+                    step,
+                    RiskEngine.assess(step),
+                    recovery = "Waiting for ${if (hardened) "typed " else ""}user confirmation"
+                )
                 val generation = ++confirmationGeneration
                 handler.postDelayed(
                     {
@@ -568,6 +627,12 @@ class WorkflowRunner(
     private fun retryOrFail(step: Step, requireAction: Boolean, action: (AccessibilityNodeInfo) -> Boolean, retry: Int, reason: String) {
         if (retry < step.retries) {
             log("$reason; retry ${retry + 1}/${step.retries}")
+            timeline(
+                ExecutionTimelineEvent.State.RECOVERING,
+                step,
+                RiskEngine.assess(step),
+                recovery = "$reason · retry ${retry + 1}/${step.retries}"
+            )
             handler.postDelayed({ seek(step, requireAction, retry + 1, action) }, 500)
             return
         }
@@ -603,7 +668,16 @@ class WorkflowRunner(
         val healed = SelectorResolver.heal(step.selector, snapshot) ?: return null
         healedSteps += index
         agentMemory.recordRepair(packageName, serialize(step.selector), serialize(healed.selector), service.appVersion(packageName))
-        log("$reason; selector repaired via ${healed.selector.let { if (it.viewId != null) "viewId" else if (it.description != null) "description" else "text" }} (${(healed.confidence * 100).toInt()}%)")
+        val repairMethod = healed.selector.let {
+            if (it.viewId != null) "viewId" else if (it.description != null) "description" else "text"
+        }
+        log("$reason; selector repaired via $repairMethod (${(healed.confidence * 100).toInt()}%)")
+        timeline(
+            ExecutionTimelineEvent.State.RECOVERING,
+            step,
+            RiskEngine.assess(step),
+            recovery = "Selector repaired via $repairMethod · confidence ${(healed.confidence * 100).toInt()}%"
+        )
         return step.copy(selector = healed.selector)
     }
 
@@ -661,9 +735,15 @@ class WorkflowRunner(
         val safe = redact(message)
         resolvedSecrets.clear()
         emitLog(safe)
+        val succeeded = safe.startsWith("Completed")
+        timeline(
+            if (succeeded) ExecutionTimelineEvent.State.SUCCEEDED else ExecutionTimelineEvent.State.HALTED,
+            workflow?.steps?.getOrNull(index.coerceAtMost((workflow?.steps?.lastIndex ?: 0))),
+            stopReason = if (succeeded) null else safe
+        )
         if (!completionDelivered) {
             completionDelivered = true
-            onFinished?.invoke(safe.startsWith("Completed"), safe)
+            onFinished?.invoke(succeeded, safe)
         }
     }
 

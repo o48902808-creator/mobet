@@ -186,23 +186,26 @@ one side without taxing the other.
 
 ## Pillar 5 — Verifiable supply chain and capability proofs
 
-> **Status: provenance is now emitted by the release pipeline.** Every release build creates a
-> GitHub Artifact Attestation for the exact `mobet.apk` subject before the publish job receives
-> it. The build job has no release-write token; the publish job only checks the recorded digest
-> and publishes the already-built bytes. This makes the release a verifiable statement about
-> source, workflow, builder identity, and artifact—not merely a file attached to a tag.
+> **Status: provenance is emitted and consumed end to end.** Every release build embeds a
+> canonical, self-verifying capability manifest and creates a GitHub Artifact Attestation for the
+> exact `mobet.apk` subject before the publish job receives it. The Build integrity screen checks
+> the manifest against installed package metadata, signing, permissions, and required invariants,
+> computes the installed APK SHA-256 offline, and records the result on first launch. The build job
+> has no release-write token; the publish job only checks and publishes the already-built bytes.
 
-The next frontier is a **capability proof, not a capability claim**. A release should carry a
-machine-readable manifest containing the APK digest, commit, test suite result, merged-manifest
-permission posture, validator version, ledger format version, and attestation reference. The
-app can display this immutable build card offline, while the audit ledger records the digest and
-verification outcome at first launch. No server, telemetry, or trust in a mutable web page is
-needed.
+Each release now carries a **capability proof, not only a capability claim**. The embedded
+machine-readable manifest contains the version, commit, workflow, policy and ledger versions,
+engine declarations, permission invariants, expected signing, and attestation reference. Its
+canonical payload digest is verified offline. Mobet separately hashes the installed APK bytes;
+the external release sidecar carries that final artifact digest because embedding a file's own
+whole-file hash would be self-referential. No server, telemetry, or mutable web page is needed.
 
 The invariant is deliberately asymmetric: model output can improve planning, but only signed
 release provenance and deterministic local policy can establish what shipped and what may run.
-A future device-lab gate should verify the attestation, install the APK, exercise the zero-radio
-manifest check, and export a redacted ledger chain as one reproducible evidence bundle.
+The API 29 device-lab gate now installs and exercises the APK, initializes the pinned Sigstore
+trust root offline, runs the Keystore/ledger/UI suites, and emits a deterministic screenshot-free
+evidence envelope over the APK and connected-test report digests. Release bundles are published
+separately because the artifact attestation is created only after the final release APK exists.
 
 **Acceptance gates:** `actions/attest-build-provenance` succeeds; the release digest matches the
 attested subject; `unzip -t` and package metadata checks pass; the merged manifest has no radio
@@ -211,24 +214,28 @@ silently repaired.
 
 ## Pillar 6 — Voice and safe tool calling
 
-Voice is now treated as an input modality, not an authority. Mobet uses Android's on-device
-`SpeechRecognizer` when available (with explicit microphone consent); cloud recognition is never
-a fallback. A future bundled Whisper/Vosk backend is compatible with this contract only if its
-model is shipped locally, its size and battery budget are accepted, and recognition output still
-requires review. Streaming audio must never be retained by default.
+Voice is now treated as an input modality, not an authority. `VoiceEngine` has Android on-device,
+optional local-PCM model-pack, and explicit unavailable implementations. Cloud recognition is
+never a fallback. Mutable PCM is zeroed in `finally`, Android recognition is lifecycle-cancelled,
+and transcript contents are not logged. A Whisper/Vosk model remains an optional separate pack
+because its size, memory, battery, and cold-start costs are not acceptable as a mandatory backend.
 
-The agent now has a typed `ToolCall`/`ToolRegistry` boundary. Model or voice intent can request
-only an allow-listed tool with bounded identifiers and arguments; unknown tools, malformed calls,
-and oversized payloads are rejected before dispatch. Tools return structured results and must
-still pass the existing deterministic policy before any device mutation. The initial tools are
-read-only screen description and action enumeration. This is the safe foundation for future
-calendar, file, or app-specific tools without turning natural language into arbitrary execution.
+The agent now has a typed `ToolCall`/`ToolRegistry` boundary. Every tool declares typed input and
+bounded output schemas, package scope, risk, exact-call confirmation requirements, and autonomous
+eligibility. Authorization is repeated at dispatch, so direct calls and package changes cannot
+bypass a prior plan check. Every allowed or denied call crosses a mandatory audit sink containing
+redacted arguments, risk, policy and confirmation outcomes, and a result digest. The registered
+runtime tools remain read-only screen description, action enumeration, and package inspection;
+mutating tools stay behind the workflow safety pipeline until intent-to-plan integration.
 
 ## Implementation status: frontier phases
 
 The codebase now contains the first cross-phase contracts: an offline capability card, typed tool
 risk classes and confirmation gates, an on-device-only voice status boundary, and a portable,
-redacted ledger export format. These contracts intentionally land before richer engines: Whisper,
-new tools, and workflow bundles must plug into the same gates rather than create parallel authority
-paths. Remaining device-lab work is integration testing of the platform recognizer, attestation
-verification, and accessibility-driven recovery on representative Android versions.
+redacted ledger evidence format. Ledger exports include build/policy identity, preserve the source
+head, and create a second verifiable chain over the exact redacted content; the standard-library
+Python verifier checks the bundle independently. These contracts intentionally land before richer
+engines: Whisper, new tools, and workflow bundles must plug into the same gates rather than create
+parallel authority paths. Remaining device-lab work is integration testing of the platform
+recognizer, attestation verification, and accessibility-driven recovery on representative Android
+versions.

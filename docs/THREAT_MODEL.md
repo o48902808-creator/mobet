@@ -37,7 +37,7 @@
 - CI tokens are read-only and checkout credentials are not persisted. The one write-token workflow is `pin-dependencies.yml`, manual-only, which resolves the full build dependency set and commits `gradle/verification-metadata.xml` back to the branch; from then on every CI build verifies artifact checksums fail-closed, so a compromised registry artifact (adversary 7) breaks the build loudly instead of shipping. The pins go stale by design and are regenerated — a reviewable, one-click dispatch — after any intentional dependency bump.
 - `launch` is the only action that can move automation into another app; its destination must appear in `policy.allowedPackages`, is validated statically by `PlanValidator`, and is re-checked against the same allowlist immediately before the switch.
 - Scheduling posts a reminder notification only. Workflows are never started unattended, preserving the requirement that a user is present to answer confirmations and press Stop. Reminders are made reliable without weakening that: a non-exported BOOT_COMPLETED receiver (the sole reason RECEIVE_BOOT_COMPLETED is declared) re-arms pending reminders after a reboot and posts at boot any whose time passed while the device was off — it delivers notifications only and can never start a run. Changing this is the highest-impact decision the project can take; it is gated by `docs/SCHEDULED_RUNS_REVIEW.md`, which binds any implementation to per-workflow opt-in, LOW-risk/gate-free plans, degrade-to-reminder on violation, and explicit sign-off among other constraints.
-- Exported bundles contain workflow JSON only. Secret values are never read or written by the export path; a `{{secret:name}}` reference is exported without its value, and the `FileProvider` is scoped to a dedicated exports directory so captures, memory, and the ledger are unreachable.
+- User-initiated exports are either workflow JSON (secret references only, never values) or a redacted ledger evidence bundle. Ledger exports exclude screenshots and secrets, re-chain the exact redacted events, and expose only a staged JSON file—not encrypted ledger storage. The `FileProvider` is scoped to the dedicated exports directory, so captures, memory, secrets, and internal state remain unreachable.
 - **Run output is redacted at a single chokepoint.** Every runner log line reaches three persistent sinks — the diagnostics preference file, the audit ledger, and a package-scoped broadcast — so `WorkflowRunner.log` masks every `{{secret:…}}` value resolved during the run before emitting. This is enforced by construction: the injected sink is named `emitLog` and the redacting `log` wraps it, so a new message cannot reintroduce the leak by forgetting to redact at its own call site. Longest values are masked first, so one secret containing another cannot leave a fragment behind. Values are dropped when the run ends. `SecretRedactionTest` covers it.
 - **OCR results report the query, never the matched line.** `bestMatch` returns whole OCR lines *containing* the query, so echoing the match would copy neighbouring screen text — a balance sharing a line with a "Transfer" button — into the ledger. Only the user's own query is logged.
 - **Risk look-ahead scores steps as they will execute.** The `confirm` gate hardens on a CRITICAL next step; it resolves `{{var:…}}` before scoring, so risky text arriving through a variable cannot present as a harmless tap at gate time. Secrets are deliberately *not* resolved for scoring, and the worse of the raw and resolved readings is taken, so substitution can only raise a tier. `VariableRiskLookaheadTest` covers it.
@@ -146,17 +146,17 @@ The single new mic use: dictating an autonomous goal, and only under these locks
 - **Opt-in twice over.** Nothing listens until the user taps 🎙 Dictate inside the goal
   dialog, and Android must grant `RECORD_AUDIO` at runtime first. Deny and the app is
   unchanged — the tap explains the outcome and typing works as always.
-- **On-device or not at all.** Only `createOnDeviceSpeechRecognizer` is used: prechecked by
-  `isOnDeviceRecognitionAvailable` on API 34+, and on 31–33 covered by the recognizer's own
-  error path. Devices without an on-device backend get a clear "type instead" message; the
-  cloud-recognition fallback is refused, not used, so audio never leaves the phone and the
-  no-network invariant is not even load-bearing here.
+- **On-device or not at all.** `VoiceEngines` selects only `AndroidOnDeviceVoiceEngine`, which
+  requires `isOnDeviceRecognitionAvailable` and uses `createOnDeviceSpeechRecognizer`; otherwise
+  it returns `UnavailableVoiceEngine`. The generic recognizer factory is never called. Optional
+  local PCM model packs have no network authority and clear their mutable audio buffer in `finally`.
 - **Input, never authority.** The transcript is dropped into the goal field for the user to
   read and edit; it cannot start a run, fill completion evidence, or bypass any gate. From
   the first character of review onward it is user-authored text, held to exactly the trust
   class of typed input.
-- **No persistence.** The recognizer is destroyed on result, error, dismiss, and activity
-  destruction; no audio or transcript is stored.
+- **No persistence.** Cancellation is lifecycle-bound; the recognizer is cancelled and destroyed
+  on result, error, dismiss, and activity destruction. Transcript text is not logged, and optional
+  local-engine PCM buffers are zeroed after every attempt.
 
 ## Non-goals and residual risks
 

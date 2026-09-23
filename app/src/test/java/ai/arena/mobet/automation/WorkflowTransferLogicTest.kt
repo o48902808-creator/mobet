@@ -1,5 +1,7 @@
 package ai.arena.mobet.automation
 
+import ai.arena.mobet.agent.ScreenFingerprint
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -175,6 +177,35 @@ class WorkflowTransferLogicTest {
     fun anEmptyBundleIsRefused() {
         val source = """{"format":"mobet.workflow-bundle","version":1,"workflows":[]}"""
         assertTrue(WorkflowTransfer.parseBundle(source).isFailure)
+    }
+
+    @Test
+    fun versionTwoContentHashIsRequiredAndVerified() {
+        val workflow = JSONObject("""{"package":"com.example.app","steps":[{"action":"back"}]}""")
+        val hash = ScreenFingerprint.sha256(workflow.toString())
+        val source = JSONObject()
+            .put("format", WorkflowTransfer.FORMAT)
+            .put("version", 2)
+            .put("workflows", org.json.JSONArray().put(
+                JSONObject().put("name", "Verified").put("contentHash", hash).put("workflow", workflow)
+            )).toString()
+        val result = WorkflowTransfer.parseBundle(source).getOrThrow()
+        assertEquals(1, result.validCount)
+        assertTrue(result.workflows.single().contentHashVerified)
+    }
+
+    @Test
+    fun tamperedVersionTwoWorkflowStaysQuarantined() {
+        val workflow = JSONObject("""{"package":"com.example.app","steps":[{"action":"back"}]}""")
+        val source = JSONObject()
+            .put("format", WorkflowTransfer.FORMAT)
+            .put("version", 2)
+            .put("workflows", org.json.JSONArray().put(
+                JSONObject().put("name", "Tampered").put("contentHash", "0".repeat(64)).put("workflow", workflow)
+            )).toString()
+        val result = WorkflowTransfer.parseBundle(source).getOrThrow()
+        assertEquals(0, result.validCount)
+        assertTrue(result.workflows.single().detail.contains("quarantined"))
     }
 
     @Test

@@ -30,6 +30,9 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      - name: Test standalone ledger verifier
+        run: python3 scripts/test_verify_ledger.py
+
       # The repository intentionally omits the Gradle wrapper JAR; CI pins Gradle itself.
       - name: Run deterministic unit tests
         id: tests
@@ -130,7 +133,24 @@ jobs:
           exit 1
 
       - name: Assemble debug APK
-        run: gradle --no-daemon --warning-mode all assembleDebug
+        id: assemble
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          gradle --no-daemon --warning-mode all assembleDebug --stacktrace 2>&1 | tee /tmp/assemble.log
+
+      - name: Report APK assembly errors
+        if: steps.assemble.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          log = open('/tmp/assemble.log', errors='replace').read()
+          markers = ('* What went wrong:', 'Execution failed for task', 'Caused by:', 'More than one file', 'Duplicate class')
+          lines = [line.strip() for line in log.splitlines() if any(m in line for m in markers)]
+          for line in lines[-30:]:
+              safe = line[:900].replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+              print(f'::error title=APK assembly::{safe}')
+          PY
+          exit 1
 
       - name: Upload test reports
         if: always()
@@ -222,3 +242,26 @@ jobs:
                   print('::error title=Device failure::connectedDebugAndroidTest failed; no XML or error lines found.')
           raise SystemExit(1)
           PY
+
+      - name: Build device-lab evidence envelope
+        if: steps.device.outcome == 'success'
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          python3 scripts/build-evidence-bundle.py \
+            --apk "$APK" \
+            --capability app/src/main/assets/mobet-capability.json \
+            --tests app/build/outputs/androidTest-results \
+            --device "GitHub-hosted Android emulator API 29 x86_64" \
+            --output mobet-device-evidence.zip
+          sha256sum mobet-device-evidence.zip > mobet-device-evidence.zip.sha256
+
+      - name: Upload device-lab evidence
+        if: steps.device.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-lab-evidence-api29
+          path: |
+            mobet-device-evidence.zip
+            mobet-device-evidence.zip.sha256
+          if-no-files-found: error

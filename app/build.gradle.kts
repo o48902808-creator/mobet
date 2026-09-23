@@ -78,8 +78,8 @@ android {
         applicationId = "ai.arena.mobet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.7.0"
+        versionCode = 9
+        versionName = "0.8.0"
         // The whole icon set is vector drawables; no raster assets are shipped.
         vectorDrawables.useSupportLibrary = true
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -143,6 +143,19 @@ android {
         }
     }
 
+    packaging {
+        resources.excludes += setOf(
+            "META-INF/DEPENDENCIES",
+            "META-INF/LICENSE",
+            "META-INF/LICENSE.txt",
+            "META-INF/NOTICE",
+            "META-INF/NOTICE.txt",
+            "META-INF/INDEX.LIST",
+            "META-INF/io.netty.versions.properties",
+            "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        )
+    }
+
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
@@ -191,6 +204,13 @@ dependencies {
     // (docs/FRONTIER.md pillar 1A); inference runs in system processes and the merged-manifest
     // audit still forbids any network permission landing in the app.
     implementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
+    // Offline Sigstore bundle verification. Runtime trust is loaded only from the pinned asset;
+    // sigstorePublicDefaults() is deliberately never used because Mobet has no network permission.
+    implementation("dev.sigstore:sigstore-java:2.2.0") {
+        // sigstore-java carries the generated Google API protos it consumes; retaining the
+        // transitive copy would produce duplicate DEX classes.
+        exclude(group = "com.google.api.grpc", module = "proto-google-common-protos")
+    }
 
     testImplementation("junit:junit:4.13.2")
     // Real org.json implementation for JVM unit tests (the android.jar version is stubbed).
