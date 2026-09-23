@@ -4,7 +4,8 @@ import com.google.mlkit.genai.common.FeatureStatus
 import com.google.mlkit.genai.prompt.Generation
 import com.google.mlkit.genai.prompt.GenerativeModel
 import com.google.mlkit.genai.prompt.generationConfig
-import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * AICore (Gemini Nano) implementation of [ModelAssistant] — docs/FRONTIER.md pillar 1A.
@@ -56,12 +57,19 @@ class AiCoreModelAssistant private constructor(
         return ranked ?: fallback.rankSafeCandidates(goal, observation, allowedActionIds)
     }
 
-    /** One bounded, serialized inference; any failure (timeout, quota, AICore split) reads as null. */
+    /**
+     * One bounded, serialized inference; any failure (timeout, quota, AICore split) reads as
+     * null. The beta API surface is coroutine-native, so the synchronous contract bridges via
+     * runBlocking + withTimeoutOrNull — the timeout cancels the coroutine, and kotlinx is
+     * transitively guaranteed on the classpath (the API exposes Flow).
+     */
     private fun infer(prompt: String): String? = runCatching {
         synchronized(model) {
-            model.generateContent(prompt)
-                .get(INFER_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                .candidates.firstOrNull()?.text
+            runBlocking {
+                withTimeoutOrNull(INFER_TIMEOUT_MS) {
+                    model.generateContent(prompt).candidates.firstOrNull()?.text
+                }
+            }
         }
     }.getOrNull()?.takeIf { it.isNotBlank() }
 
@@ -91,7 +99,9 @@ class AiCoreModelAssistant private constructor(
 
         private fun create(): AiCoreModelAssistant? = runCatching {
             val model = Generation.getClient(generationConfig { })
-            val status = model.checkStatus().get(STATUS_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            val status = runBlocking {
+                withTimeoutOrNull(STATUS_TIMEOUT_MS) { model.checkStatus() }
+            }
             if (status == FeatureStatus.AVAILABLE) {
                 AiCoreModelAssistant(model, LocalStructuredModelAssistant())
             } else {
