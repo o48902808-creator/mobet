@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 
 class MobetAccessibilityService : AccessibilityService() {
     private var runner: WorkflowRunner? = null
@@ -111,6 +112,32 @@ class MobetAccessibilityService : AccessibilityService() {
 
     internal fun noteAutomatedAction() {
         lastAutomatedActionAt = android.os.SystemClock.uptimeMillis()
+    }
+
+    /**
+     * Fail-closed inspection of all interactive windows, not just rootInActiveWindow. Accessibility
+     * overlays and system windows can otherwise obscure a valid target while preserving its root.
+     * Input methods are allowed because text entry legitimately opens them; Mobet never owns or
+     * creates an accessibility overlay.
+     */
+    internal fun unsafeSurfaceReason(allowedPackages: Set<String>): String? {
+        val observed = windows.orEmpty().map { window ->
+            val owner = window.root?.let { root ->
+                try { root.packageName?.toString() } finally { root.recycle() }
+            }
+            SurfaceWindow(
+                kind = when (window.type) {
+                    AccessibilityWindowInfo.TYPE_APPLICATION -> SurfaceWindow.Kind.APPLICATION
+                    AccessibilityWindowInfo.TYPE_INPUT_METHOD -> SurfaceWindow.Kind.INPUT_METHOD
+                    AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> SurfaceWindow.Kind.ACCESSIBILITY_OVERLAY
+                    AccessibilityWindowInfo.TYPE_SYSTEM -> SurfaceWindow.Kind.SYSTEM
+                    else -> SurfaceWindow.Kind.OTHER
+                },
+                ownerPackage = owner,
+                active = window.isActive
+            )
+        }
+        return SurfaceBoundary.unsafeReason(observed, allowedPackages, packageName, SECURE_SYSTEM_PACKAGES)
     }
 
     fun startRecording() {

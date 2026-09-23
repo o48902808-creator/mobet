@@ -174,6 +174,10 @@ class LiveAndroidAgent(
         if (android.os.SystemClock.uptimeMillis() - startedAt > target.maxRuntimeMs) {
             finish(AgentStatus.EXHAUSTED, "runtime budget exhausted"); return
         }
+        service.unsafeSurfaceReason(setOf(target.allowedPackage))?.let { reason ->
+            finish(AgentStatus.ABSTAINED, "surface boundary blocked action: $reason")
+            return
+        }
         val snapshot = service.currentSnapshot()
         if (snapshot == null) { handler.postDelayed(::tick, 400); return }
         val observation = AccessibilityObservationAdapter.adapt(snapshot, service.appVersion(snapshot.packageName))

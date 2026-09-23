@@ -181,6 +181,10 @@ class WorkflowRunner(
             finish("Runtime budget exceeded (${flow.policy.maxRuntimeMs} ms)")
             return
         }
+        service.unsafeSurfaceReason(flow.policy.allowedPackages)?.let { reason ->
+            finish("Surface boundary blocked action: $reason")
+            return
+        }
         val activePackage = service.activePackageName()
         if ((index > 0 || enforcePackageAtFirstStep) && activePackage != null && activePackage !in flow.policy.allowedPackages) {
             finish("Package boundary blocked action in $activePackage")

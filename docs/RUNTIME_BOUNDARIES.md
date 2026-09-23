@@ -10,6 +10,9 @@ The accessibility service also treats unexpected human and system surfaces as sa
 - click or scroll events not temporally attributable to a Mobet action stop the active run as user
   intervention;
 - System UI and Android permission-controller windows stop the run immediately;
+- every action enumerates all accessibility windows, not only the active root: accessibility
+  overlays, active system surfaces, and unexpected active application windows fail closed;
+- input-method windows remain allowed so reviewed text entry can operate normally;
 - accessibility interruption or service destruction cancels workflow and autonomous controllers;
 - existing per-action package checks still reject every unexpected package transition.
 
