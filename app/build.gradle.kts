@@ -194,7 +194,7 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     // Real org.json implementation for JVM unit tests (the android.jar version is stubbed).
-    testImplementation("org.json:json:20240303")
+    testImplementation("org.json:json:20260814")
 
     // On-device tests: the Android Keystore boundary (SecretStore, EncryptedStateStore) and
     // encrypted persistence (AuditLedger) cannot be meaningfully simulated on the JVM.
