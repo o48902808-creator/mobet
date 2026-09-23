@@ -2,7 +2,7 @@
 
 Mobet is an Android-first, on-device mobile automation prototype. It uses Android's Accessibility API to locate controls and run explicit JSON workflows that the phone owner starts.
 
-## Frontier capabilities (v0.6.0)
+## Frontier capabilities (v0.7.0)
 
 - **Device-reliability layer** — autonomous decisions require structurally settled observation quorums with strict sample deadlines. Resource governance blocks new operations under severe thermal pressure or critically low battery, while generation-scoped callbacks eliminate lifecycle races.
 - **Executable hierarchy and probabilistic planning** — subgoals now run through an explicit state machine whose preconditions and completion evidence advance only after observed transitions. Bayesian learned-route reliability, bounded beam-style lookahead, reversible-action utility, and local replanning cooperate under hard budgets.
@@ -13,7 +13,7 @@ Mobet is an Android-first, on-device mobile automation prototype. It uses Androi
 - **Operational resilience** — encrypted crash checkpoints never auto-resume or replay irreversible operations. Active runs expose an ongoing notification with emergency Stop, remain explicitly user-started, and retain in-app Stop as a fallback.
 - **Adversarially hardened autonomy** — every proposed selector is canonicalized against a fresh live snapshot immediately before execution; foreign-package success spoofing, stale callbacks, screen-borne prompt injection, forged action metadata, and transient one-frame completion evidence fail closed. Autonomous runs have independent cycle, search-expansion, candidate, depth, retry, package, risk, and wall-clock budgets.
 - **Encrypted adaptive intelligence** — episodic and semantic memory is AES-GCM encrypted with namespace-bound authenticated data and a non-exportable Android Keystore key. Bayesian route reliability resists one-shot overfitting; temporal evidence decays; repeated prediction contradictions trigger structural-drift invalidation; legacy plaintext metadata migrates atomically and is deleted only after a successful encrypted commit.
-- **Zero-write CI security posture** — CI runs with read-only repository permissions and no persisted checkout credential, performs deterministic intelligence tests plus Android security lint, then assembles the APK and publishes reports. The app rejects cleartext traffic and protects its UI with `FLAG_SECURE`.
+- **Zero-write CI security posture** — CI runs with read-only repository permissions and no persisted checkout credential, performs deterministic intelligence tests plus Android security lint, then assembles the APK and publishes reports. The app rejects cleartext traffic and protects its UI with `FLAG_SECURE`. The manual *Pin dependency checksums* workflow writes `gradle/verification-metadata.xml` (sha256+sha512 for every resolved artifact); once committed, every CI build verifies the pins fail-closed — a swapped registry artifact breaks the build loudly instead of shipping.
 - **Live Apex Android agent** — accessibility snapshots are converted into node-free `AgentObservation`s and selected tap/scroll/back actions return through a narrow guarded gateway. Every operation is translated to a typed workflow, rescored by `RiskEngine`, validated by `PlanValidator`, confirmed when required, and executed only by `WorkflowRunner`. The UI exposes bounded goal runs with explicit completion evidence and Stop.
 - **Persistent private memory** — successful and failed transitions, dead ends, selector-repair hashes, confidence, recency, and app-version metadata survive restarts. Confidence decays over 45 days, dead ends expire, major app versions invalidate old routes, storage is bounded, and screen/OCR text, entered values, secrets, and screenshots are excluded.
 - **Hierarchical, uncertainty-aware planning** — goals decompose into subgoals with explicit preconditions and completion evidence. Accessibility, optional OCR, user, and world-model evidence remain separately attributed in a belief state; ambiguous candidates cause abstention instead of a guess.
@@ -65,6 +65,21 @@ the order the features were built.
 - **Safety affordances** — the hardened `APPROVE` confirmation keeps its Confirm button
   disabled until the exact word is typed, and every destructive control (clear ledger, clear
   agent memory, delete a secret or capture) is behind an explicit second confirmation.
+- **Editor that pinpoints its errors** — an invalid workflow chip shows the failing
+  line/column and tapping it drops the caret on the offending character; the editor itself
+  paints numbered gutter lines to match, pinned while scrolling horizontally. A policy-issue
+  chip opens the full violation report in one tap.
+- **Scannable headers, one clear primary action** — each card's section label carries its
+  glyph (workflow, planning, inspect, activity), and the run bar's Run control is taller and
+  elevated so the single consequential action reads as the single primary control.
+- **Motion with meaning** — cold starts stagger the cards and run bar into place top to
+  bottom; the service dot breathes while automation is armed (and pops when it flips); summary
+  chips fade in as they rebuild; the workflow card's outline warms while the editor holds
+  focus; error-chip jumps flash the offending character. Every animation gates on the system
+  animator-scale setting, so "remove animations" is respected end to end.
+- **Announced state changes** — the activity log is a polite accessibility live region, and
+  the automation service's on/off transitions are announced to screen readers, matching the
+  animated visual cue.
 - Edge-to-edge insets, 48dp touch targets, content descriptions, a light/dark palette mapped
   to Material 3 colour roles, and an in-app "How Mobet works" sheet.
 
@@ -77,7 +92,7 @@ the order the features were built.
 - Scroll, wait, delay, Back, and Home actions
 - Per-step polling, bounded retries, timeout, status, Stop, and fail-fast handling
 - Variables and conditional `ifText` / `unlessText` execution
-- AES-GCM secrets protected by a non-exportable Android Keystore key
+- AES-GCM secrets protected by a non-exportable Android Keystore key, name-bound so ciphertexts cannot be swapped between entries
 - Blocking, user-visible confirmation steps for consequential actions
 - Editable workflow JSON stored locally on the device
 - Named local workflow library with Save and Load
@@ -101,9 +116,33 @@ the order the features were built.
 - Model-neutral JSON plan boundary for future local or hosted planners
 - Included harmless Android Settings demonstration
 
-No data is sent off-device. This build does not include a network permission. See the explicit [threat model](docs/THREAT_MODEL.md) for enforced invariants and residual risks.
+No data is sent off-device. This build does not include a network permission. See the explicit [threat model](docs/THREAT_MODEL.md) for enforced invariants and residual risks. For the reasoning-research context of the agent layer — what State-of-Thought endogenous reasoning is, and which of its operators Mobet runs in deterministic form (state-conditioned evidence gating) or deliberately declines (state-conditioned stopping) — see [docs/STATE_OF_THOUGHT.md](docs/STATE_OF_THOUGHT.md). A full source-verified inventory of capabilities, gaps, live integrations and the integration-opportunity register lives in [docs/CAPABILITY_MAP.md](docs/CAPABILITY_MAP.md).
 
 ## Build and install
+
+### Install the prebuilt APK (no build tools needed)
+
+Download the latest release APK:
+
+https://github.com/o48902808-creator/mobet/releases/latest/download/mobet.apk
+
+The release workflow (`.github/workflows/release.yml`) builds `gradle test
+assembleDebug` and ships `app-debug.apk` as `mobet.apk`, so the release is signed with
+the standard Android debug key. **No keystore, signing key, or `MOBET_*` GitHub
+secrets are needed to build or publish it** — the optional `MOBET_KEYSTORE_*`
+environment variables in `app/build.gradle.kts` only affect local `assembleRelease`
+builds, which the release workflow never invokes.
+
+All builds use the debug key, but an in-place update can still fail with a
+signature-mismatch error (notably between APKs built on different machines). If the
+installer refuses the update, **uninstall the old Mobet first** — this clears its
+saved workflows, secrets, captures, and audit ledger — then install the downloaded
+APK.
+
+Maintainer release runbook (merge evidence, the three one-time repository settings,
+tagging v0.7.0, upgrade/rollback semantics): [docs/PRODUCTION.md](docs/PRODUCTION.md).
+
+### Build from source
 
 Prerequisites: Android Studio Ladybug or newer, Android SDK 35, and JDK 17.
 
@@ -175,6 +214,53 @@ Define non-sensitive values in the root `variables` object and reference them as
 }
 ```
 
+A step may also declare **post-step evidence** with `expect`: the run halts with a named
+reason if the next screen doesn't satisfy the assertions, so a silent no-op tap never hands
+an unverified screen to the next step. Assertions are checked once, against the first
+observation after the step, over the accessibility label channel:
+
+```json
+{
+  "action": "tap",
+  "text": "Wi-Fi",
+  "expect": {
+    "screenChange": true,
+    "textPresent": "Network & internet",
+    "textAbsent": "Airplane mode",
+    "package": "com.android.settings"
+  }
+}
+```
+
+`screenChange` compares the screen fingerprint (vacuous without a baseline, e.g. right after
+a launch); `textPresent`/`textAbsent` match case-insensitively and support `{{var:…}}` /
+`{{secret:…}}` substitution with the same log masking as the step itself; `package` must be
+listed in `policy.allowedPackages`. An empty `expect` block is a policy violation.
+
+**Bounded control flow** turns a workflow from a recording into a strategy. Steps may carry
+a `label`, and three decide-only actions steer execution without touching the device
+themselves: `repeatUntil` jumps back to a label until its `expect` condition holds (capped
+by its own `maxIterations`, 1–50), `branch` takes `goto` or `elseGoto` based on its `expect`
+condition, and `tryAlternates` taps the first of its option selectors (1–8) present on the
+settled screen:
+
+```json
+{ "action": "delay", "label": "top" },
+{ "action": "wait", "text": "Load" },
+{ "action": "repeatUntil", "goto": "top", "maxIterations": 5,
+  "expect": { "textPresent": "Done" } },
+{ "action": "tryAlternates", "options": [ { "text": "Close" }, { "viewId": "id/ok" } ] }
+```
+
+Conditions evaluate against a fresh observation: `textPresent`/`textAbsent`/`package` read
+the live screen; `screenChange` compares against the runner's last observation, so it works
+after steps you control but not across a launch. Three rails keep flow bounded: each
+repeat's own `maxIterations`, a per-run control-hop budget (200, halting probable infinite
+loops), and the action budget — loops still cannot exceed `policy.maxActions` actions that
+touch the device. Statically, the validator rejects duplicate labels, dangling jumps,
+forward-aiming repeats, jump fields on ordinary actions, and elevated alternate options
+without a preceding confirm.
+
 ### Finding your way around
 
 ![Searchable picker and highlighted editor](docs/screenshots/phase3-ux.png)
@@ -225,7 +311,14 @@ Mobet can remind you to start a saved workflow at a chosen time (library › **R
 it will not run one by itself. Unattended execution is intentionally unsupported: with nobody
 present, a confirmation prompt cannot be answered, a mis-grounded selector cannot be caught,
 and Stop cannot be pressed. The reminder posts a notification that opens Mobet with the
-workflow loaded — you still press **Run**.
+workflow loaded — you still press **Run**. Reminders survive reboots: a boot receiver re-arms
+the stored alarms, and a reminder whose time passed while the device was off is posted at boot
+rather than silently dropped.
+
+Real scheduled execution has been proposed; it can only proceed under the constraints in
+[docs/SCHEDULED_RUNS_REVIEW.md](docs/SCHEDULED_RUNS_REVIEW.md), which requires per-workflow
+opt-in, LOW-risk/gate-free plans only, degrade-to-reminder on any violation, and an explicit
+maintainer sign-off. Until that gate is passed, this section remains the behaviour.
 
 ## Safety and platform notes
 
@@ -302,11 +395,29 @@ Security posture is asserted rather than assumed: `ManifestPostureTest` locks th
 gradle test                            # run the JVM unit suite
 gradle verifyDebugNoNetworkPermission  # assert the merged manifest has no network access
 gradle assembleDebug                   # build the debug APK (depends on the check above)
+gradle connectedDebugAndroidTest       # on-device tests (SecretStore/Keystore, ledger persistence)
 ```
+
+On-device tests (`app/src/androidTest/`) cover what a JVM cannot: the Android Keystore
+boundary — `SecretStore` round-trips, corrupted payloads failing closed, and ciphertexts
+swapped between names being rejected via name-bound AAD — plus encrypted audit-ledger
+persistence and clear-without-tamper-alarm. A reminder-restore suite runs the reboot path
+against a real AlarmManager/NotificationManager: non-boot intents are ignored, reminders
+missed while powered off are posted once and consumed, future reminders are re-armed with
+their trigger unchanged, and records for deleted workflows are forgotten. An Espresso suite
+locks the v0.7.0 control surface: service-disabled posture gates **Run workflow**, the
+bundled demo preloads the editor, drafts survive rotation, and Dry run / Validate policy
+open their reports without the service. The workflow's **Connected device tests** job runs them on an API 29 emulator
+on every push.
 
 GitHub Actions (`.github/workflows/android-ci.yml`) runs both on every push and pull request and uploads test reports plus the debug APK as artifacts.
 
 ## Next milestones
+
+The frontier roadmap — on-device AICore planning behind the existing deterministic
+contract, per-step evidence-verified execution, bounded control flow, presence without a
+network — lives in [docs/FRONTIER.md](docs/FRONTIER.md), sequenced as 0.8 / 0.9 / 1.0 with
+per-pillar proofs and honest cost notes. Near-term operational milestones:
 
 1. Instrumented on-device coverage for OEM-specific accessibility trees and interruption handling
 2. Signed APK pipeline plus reproducible release provenance

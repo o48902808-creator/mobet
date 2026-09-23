@@ -8,28 +8,88 @@ data class BeliefState(val hypotheses: List<BeliefHypothesis>, val ambiguity: Do
     fun confidentFact(minimum: Double = 0.75): String? = hypotheses.firstOrNull { it.probability >= minimum }?.proposition
 }
 
-/** Weighted evidence fusion which preserves competing interpretations instead of forcing a label. */
+/**
+ * Dempster–Shafer evidence fusion (docs/FRONTIER.md pillar 3, final algorithm).
+ *
+ * Each item places mass w = confidence × channel weight on its proposition and 1−w on the
+ * ignorance set Θ; this focal family combines in closed form under Dempster's rule, so the
+ * implementation is exact, not sampled. Contradiction between propositions does not vanish
+ * into the average as it did under weighted-sum fusion: it accumulates in the conflict mass
+ * K, which is what ambiguity reports. Three consequences that are the point of the upgrade —
+ *
+ *  - corroboration compounds: independent channels supporting the same reading raise it
+ *    instead of merely averaging in (a truth-channel read plus a weak world-model echo can
+ *    legitimately cross the completion threshold);
+ *  - noise cannot dilute ground truth: a full-weight accessibility or user fact leaves an
+ *    OCR contradiction almost nowhere but K, so the truth keeps probability 1 and only the
+ *    *doubt* rises;
+ *  - ignorance stays visible: mass on Θ is allocated to hypotheses in proportion to their
+ *    support, preserving the historic single-reading "probability 1" corner while the
+ *    conflict-discounted margin governs how much the agent should hesitate.
+ *
+ * Under these focal sets the conflict-discounted margin (m₁−m₂)·(1−K) collapses exactly to
+ * the plain unnormalized support margin q₁−q₂, which is what [ambiguity] reports as 1 − margin.
+ */
 object BeliefReasoner {
-    private val sourceWeight = mapOf(
+    /**
+     * Static per-source trust. Ground-truth channels (the accessibility tree, the user) hold
+     * full weight; noisier supports (OCR, the world model) count less toward corroboration.
+     * This is the healthy-regime case of the state-conditioned policy in
+     * [StateOfThoughtPolicy]; see docs/STATE_OF_THOUGHT.md for the reasoning-paradigm context.
+     */
+    val DEFAULT_WEIGHTS: Map<EvidenceSource, Double> = mapOf(
         EvidenceSource.ACCESSIBILITY to 1.0,
         EvidenceSource.USER to 1.0,
         EvidenceSource.OCR to 0.72,
         EvidenceSource.WORLD_MODEL to 0.58
     )
 
-    fun infer(evidence: List<ObservationEvidence>): BeliefState {
+    /**
+     * [weights] overrides per-source trust, typically from a state-conditioned policy. A source
+     * omitted from the map falls back to its default rather than being silently suppressed —
+     * a partial policy can tighten named channels without orphaning the rest.
+     */
+    fun infer(
+        evidence: List<ObservationEvidence>,
+        weights: Map<EvidenceSource, Double> = DEFAULT_WEIGHTS
+    ): BeliefState {
         if (evidence.isEmpty()) return BeliefState(emptyList(), 1.0)
-        val scores = evidence.groupBy { normalize(it.proposition) }.mapValues { (_, items) ->
-            items.sumOf { it.confidence.coerceIn(0.0, 1.0) * sourceWeight.getValue(it.source) }
+        val items = evidence.map {
+            normalize(it.proposition) to (
+                it.confidence.coerceIn(0.0, 1.0) *
+                    (weights[it.source] ?: DEFAULT_WEIGHTS.getValue(it.source))
+                ).coerceIn(0.0, 1.0)
         }
-        val total = scores.values.sum().coerceAtLeast(0.0001)
-        val hypotheses = scores.map { (proposition, score) ->
-            BeliefHypothesis(proposition, score / total,
-                evidence.filter { normalize(it.proposition) == proposition }.map { it.source }.toSet())
+        // q(p) = (support for p) × (every other item abstains); abstainAll is q(Θ).
+        // Computed with products only — never a ratio — so full-weight evidence dividing
+        // the picture into pure conflict cannot fault.
+        val abstainAll = items.fold(1.0) { acc, (_, w) -> acc * (1 - w) }
+        val byProposition = items.groupBy({ it.first }, { it.second })
+        val support = LinkedHashMap<String, Double>()
+        byProposition.forEach { (proposition, ws) ->
+            val ownSupport = 1 - ws.fold(1.0) { acc, w -> acc * (1 - w) }
+            val othersAbstain = items.fold(1.0) { acc, (p, w) ->
+                if (p == proposition) acc else acc * (1 - w)
+            }
+            support[proposition] = ownSupport * othersAbstain
+        }
+        val totalSupport = support.values.sum()
+        val norm = totalSupport + abstainAll // = 1 − K
+        val theta = if (norm > 1e-9) abstainAll / norm else 1.0
+        val hypotheses = byProposition.keys.map { proposition ->
+            val normalized = if (norm > 1e-9) support.getValue(proposition) / norm else 0.0
+            val share = if (totalSupport > 1e-9) support.getValue(proposition) / totalSupport else 0.0
+            BeliefHypothesis(
+                proposition,
+                probability = normalized + theta * share,
+                sources = evidence
+                    .filter { normalize(it.proposition) == proposition }
+                    .map { it.source }.toSet()
+            )
         }.sortedByDescending { it.probability }
-        val ambiguity = if (hypotheses.size < 2) 1.0 - hypotheses.first().probability
-            else 1.0 - (hypotheses[0].probability - hypotheses[1].probability)
-        return BeliefState(hypotheses, ambiguity.coerceIn(0.0, 1.0))
+        val margins = support.values.sortedDescending()
+        val margin = (margins.getOrElse(0) { 0.0 } - margins.getOrElse(1) { 0.0 })
+        return BeliefState(hypotheses, (1.0 - margin).coerceIn(0.0, 1.0))
     }
 
     private fun normalize(value: String) = value.trim().lowercase().replace(Regex("\\s+"), " ")

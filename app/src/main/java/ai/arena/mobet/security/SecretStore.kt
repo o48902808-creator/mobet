@@ -3,14 +3,15 @@ package ai.arena.mobet.security
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.util.Base64
 import java.security.KeyStore
-import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 
-/** AES-GCM encrypted secret values. The non-exportable key remains in Android Keystore. */
+/**
+ * AES-GCM encrypted secret values. The non-exportable key remains in Android Keystore;
+ * payloads are name-bound (see [SecretStoreCodec]) so blobs cannot be swapped between
+ * secret names inside the store.
+ */
 class SecretStore(context: Context) {
     private val preferences = context.getSharedPreferences("encrypted_secrets", Context.MODE_PRIVATE)
 
@@ -31,23 +32,18 @@ class SecretStore(context: Context) {
 
     fun put(name: String, value: String) {
         require(name.matches(Regex("[A-Za-z0-9_.-]{1,64}"))) { "Invalid secret name" }
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, key())
-        val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
-        val payload = Base64.encodeToString(cipher.iv + encrypted, Base64.NO_WRAP)
-        preferences.edit().putString(name, payload).apply()
+        preferences.edit().putString(name, SecretStoreCodec.encrypt(name, value, key())).apply()
     }
 
     fun get(name: String): String? {
         val payload = preferences.getString(name, null) ?: return null
-        return try {
-            val bytes = Base64.decode(payload, Base64.NO_WRAP)
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(0, IV_SIZE)))
-            cipher.doFinal(bytes.copyOfRange(IV_SIZE, bytes.size)).toString(Charsets.UTF_8)
-        } catch (_: Exception) {
-            null
+        val decoded = SecretStoreCodec.decrypt(name, payload, key()) ?: return null
+        // Secrets stored before name-binding read through the legacy layout; upgrade them in
+        // place so the protection reaches existing installs without asking anyone to re-enter.
+        if (decoded.needsReencryption) {
+            runCatching { put(name, decoded.value) }
         }
+        return decoded.value
     }
 
     fun delete(name: String) = preferences.edit().remove(name).apply()
@@ -71,7 +67,5 @@ class SecretStore(context: Context) {
 
     private companion object {
         const val KEY_ALIAS = "mobet.workflow.secrets.v1"
-        const val TRANSFORMATION = "AES/GCM/NoPadding"
-        const val IV_SIZE = 12
     }
 }

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Launcher shortcuts (docs/FRONTIER.md pillar 4). One static shortcut only: the pinned
+  workflow, mirroring the quick-settings tile. Library contents are private and dynamic, so
+  no per-workflow shortcuts are published from here; the pin lives in PresenceLauncher.
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="run_pinned"
+        android:enabled="true"
+        android:icon="@drawable/ic_run"
+        android:shortcutShortLabel="@string/shortcut_run_pinned"
+        android:shortcutLongLabel="@string/shortcut_run_pinned_long">
+        <intent
+            android:action="ai.arena.mobet.RUN_PINNED"
+            android:targetPackage="ai.arena.mobet"
+            android:targetClass="ai.arena.mobet.MainActivity" />
+    </shortcut>
+</shortcuts>

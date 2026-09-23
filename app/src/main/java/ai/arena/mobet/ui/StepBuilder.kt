@@ -1,6 +1,7 @@
 package ai.arena.mobet.ui
 
 import ai.arena.mobet.R
+import ai.arena.mobet.automation.FillValueMask
 import ai.arena.mobet.automation.Workflow
 import ai.arena.mobet.policy.RiskEngine
 import ai.arena.mobet.policy.RiskTier
@@ -168,7 +169,12 @@ class StepBuilder(
             item.optString("viewId").takeIf(String::isNotBlank)?.let { add("id: ${preview(it)}") }
             item.optString("description").takeIf(String::isNotBlank)?.let { add("desc: ${preview(it)}") }
             item.optString("package").takeIf(String::isNotBlank)?.let { add("package: ${preview(it)}") }
-            item.optString("value").takeIf(String::isNotBlank)?.let { add("value: ${preview(it)}") }
+            // Literal fill values get the same masking as the dry-run report: a card is a
+            // read-only glance surface, and a pasted password must not preview on it.
+            // {{secret:name}}/{{var:name}} references stay visible — see FillValueMask.
+            item.optString("value").takeIf(String::isNotBlank)?.let {
+                add("value: ${preview(FillValueMask.mask(it))}")
+            }
             item.optString("message").takeIf(String::isNotBlank)?.let { add("“${preview(it)}”") }
             if (item.optString("action") == "delay") add("${item.optLong("delayMs", 300)} ms")
         }

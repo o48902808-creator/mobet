@@ -37,10 +37,22 @@ class GestureActionDefaultsTest {
     }
 
     @Test
-    fun defaultActionSetIsExactlyTheSelectorBasedVocabulary() {
+    fun defaultActionSetIsExactlyTheApprovedVocabulary() {
         // Pins the whole set, so adding any action to the defaults is a deliberate decision.
+        //
+        // The three control actions (docs/FRONTIER.md pillar 3) were added deliberately, not
+        // by drift: `branch`, `repeatUntil` and `tryAlternates` decide *where execution goes*
+        // but never touch the device — every actual tap/fill/launch they steer still passes
+        // the same confirm, allowlist and risk gates, and their dynamic rails (per-repeat
+        // iteration caps, the 200-hop control budget, and the action budget applied at run
+        // time) keep loops inside exactly the limits policy.maxActions expressed statically.
+        // That is the same contract the selector vocabulary already lives under: opt-out is
+        // still available by naming a smaller `policy.allowedActions`.
         assertEquals(
-            setOf("wait", "tap", "fill", "scroll", "delay", "confirm", "back", "home", "launch"),
+            setOf(
+                "wait", "tap", "fill", "scroll", "delay", "confirm", "back", "home", "launch",
+                "branch", "repeatuntil", "tryalternates"
+            ),
             AutomationPolicy.DEFAULT_ACTIONS
         )
     }

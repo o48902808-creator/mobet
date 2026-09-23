@@ -82,6 +82,7 @@ android {
         versionName = "0.7.0"
         // The whole icon set is vector drawables; no raster assets are shipped.
         vectorDrawables.useSupportLibrary = true
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildFeatures { buildConfig = true }
@@ -134,7 +135,13 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    // KGP 2.3 DSL: kotlinOptions is deprecated/removed under the compiler the GenAI Prompt
+    // client requires (its jars carry 2.3.0 metadata), so the target is set here.
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
+    }
 
     testOptions {
         unitTests.isReturnDefaultValues = true
@@ -179,8 +186,21 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     // Bundled on-device OCR model; no network connection is required at runtime.
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    // Gemini Nano via AICore (ML Kit GenAI Prompt API — a thin client; the model lives in the
+    // AICore system app, not the APK). Used only for device-gated, opt-in model assistance
+    // (docs/FRONTIER.md pillar 1A); inference runs in system processes and the merged-manifest
+    // audit still forbids any network permission landing in the app.
+    implementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
 
     testImplementation("junit:junit:4.13.2")
     // Real org.json implementation for JVM unit tests (the android.jar version is stubbed).
     testImplementation("org.json:json:20240303")
+
+    // On-device tests: the Android Keystore boundary (SecretStore, EncryptedStateStore) and
+    // encrypted persistence (AuditLedger) cannot be meaningfully simulated on the JVM.
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    // View-level verification of the Material 3 control surface and rotation-safe draft
+    // persistence — the behaviour the walkthrough in docs/TESTING_WALKTHROUGH.md describes.
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
 }

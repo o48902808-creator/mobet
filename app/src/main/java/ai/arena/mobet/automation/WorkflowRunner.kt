@@ -40,8 +40,25 @@ class WorkflowRunner(
     private var index = 0
     private var awaitingConfirmation = false
     private var nextActionApproved = false
+    /**
+     * Per-gate generation for the confirmation timeout. Without it, the timer posted for one
+     * `confirm` step measures silence across *later* gates too: workflows legitimately chain
+     * confirmations (a confirm before every elevated step), so gate N could be sitting open,
+     * answered slowly, while gate N-1's two-minute deadline fires and denies a prompt the user
+     * is actively reading. Each gate gets its own deadline.
+     */
+    private var confirmationGeneration = 0
     private var startedAt = 0L
     private var lastFingerprint: String? = null
+    /**
+     * The previously dispatched step awaiting its post-state evidence check, paired with the
+     * step number it was dispatched as. Set at dispatch, consumed exactly once by the first
+     * observation in the next [executeCurrent] tick — skipped steps and halts never leave a
+     * stale check armed because [finish]/[cancel] set `cancelled`, which mutes consumption.
+     */
+    private var pendingExpectation: Pair<Int, Step>? = null
+    /** Jump table and dynamic rails for control-flow actions; built once per run in [start]. */
+    private var controlFlow: ControlFlow? = null
     private val screenVisits = mutableMapOf<String, Int>()
     private val healedSteps = mutableSetOf<Int>()
 
@@ -81,6 +98,7 @@ class WorkflowRunner(
             return
         }
         workflow = value
+        controlFlow = ControlFlow(value.steps)
         startedAt = SystemClock.uptimeMillis()
         val elevated = value.steps.count { riskOf(it, value.variables).tier >= RiskTier.ELEVATED }
         log(
@@ -111,6 +129,8 @@ class WorkflowRunner(
     fun confirmationResult(approved: Boolean) {
         if (!awaitingConfirmation || cancelled) return
         awaitingConfirmation = false
+        // Invalidate this gate's timeout so only the *next* gate's timer is live.
+        confirmationGeneration++
         if (approved) {
             log("Confirmation approved")
             nextActionApproved = true
@@ -152,6 +172,20 @@ class WorkflowRunner(
         val riskNote = if (risk.tier >= RiskTier.ELEVATED)
             " · risk ${risk.tier.name.lowercase()} (${risk.reasons.joinToString(", ")})" else ""
         log("Step ${index + 1}/${flow.steps.size}: ${step.action}$riskNote")
+        // Arm the post-step evidence check against the *expanded* step, so `{{var:…}}` text in
+        // the expect block reads back with the same substitutions the action itself used.
+        pendingExpectation = step.expect?.let { index to step }
+        // Dynamic execution rails: loops multiply the counts PlanValidator checked statically,
+        // so decide-only hops and device-affecting actions each consume their own budget.
+        if (step.action in ControlFlow.CONTROL_ACTIONS) {
+            if (controlFlow?.consumeControlHop() != true) {
+                finish("Control-flow hop budget exhausted (${ControlFlow.MAX_CONTROL_HOPS}) — probable infinite loop")
+                return
+            }
+        } else if (controlFlow?.consumeAction(flow.policy.maxActions) != true) {
+            finish("Action budget exceeded (${flow.policy.maxActions})")
+            return
+        }
         val approved = nextActionApproved
         if (step.action != "confirm") nextActionApproved = false
         when (step.action) {
@@ -177,12 +211,106 @@ class WorkflowRunner(
             "back" -> complete(service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK), step)
             "home" -> complete(service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME), step)
             "delay" -> advance(step.delayMs)
+            "branch" -> {
+                val satisfied = evaluateControlEvidence(step)
+                val targetName = if (satisfied) step.goto else step.elseGoto
+                if (targetName == null) {
+                    advance(step.delayMs)
+                } else {
+                    val target = controlFlow?.jumpTarget(targetName)
+                    if (target == null) finish("branch: unknown label “$targetName”")
+                    else {
+                        log("Step ${index + 1}: branch ${if (satisfied) "taken" else "fallback"} → $targetName")
+                        index = target - 1
+                        advance(step.delayMs)
+                    }
+                }
+            }
+            "repeatuntil" -> {
+                if (evaluateControlEvidence(step)) {
+                    log("Step ${index + 1}: repeatUntil condition met, continuing")
+                    advance(step.delayMs)
+                } else if (controlFlow?.consumeIteration(index, step.maxIterations) != true) {
+                    finish(
+                        "repeatUntil at step ${index + 1} exhausted its maxIterations " +
+                            "(${step.maxIterations}) without the condition becoming true"
+                    )
+                } else {
+                    val target = step.goto?.let { controlFlow?.jumpTarget(it) }
+                    if (target == null) finish("repeatUntil: unknown label “${step.goto}”")
+                    else {
+                        index = target - 1
+                        advance(step.delayMs)
+                    }
+                }
+            }
+            "tryalternates" -> {
+                // First-match selector fallback, probed synchronously on the settled screen:
+                // authors place a wait before this step when settling is required.
+                val root = service.root()
+                if (root == null) {
+                    finish("tryAlternates: screen unavailable")
+                } else {
+                    var chosen: AccessibilityNodeInfo? = null
+                    var chosenIndex = -1
+                    var deadEndsSkipped = 0
+                    for (i in step.options.indices) {
+                        // Dead-end routing: options recorded as dead on this screen (within
+                        // their TTL) are skipped without probing — the memory half of
+                        // self-healing applied to alternates. Every skip is logged, so a
+                        // routing decision is auditable rather than silently narrowing the
+                        // fallback list.
+                        if (lastFingerprint != null &&
+                            agentMemory.isDeadEnd(lastFingerprint!!, serialize(step.options[i]))
+                        ) {
+                            deadEndsSkipped++
+                            log("tryAlternates: option ${i + 1} skipped (recorded dead end)")
+                            continue
+                        }
+                        val candidate = find(root, step.options[i])
+                        if (candidate != null) {
+                            chosen = candidate
+                            chosenIndex = i
+                            break
+                        }
+                    }
+                    if (chosen == null) {
+                        root.recycle()
+                        val tried = step.options.joinToString(", ") { serialize(it) }
+                        val deadNote = if (deadEndsSkipped > 0) " ($deadEndsSkipped skipped as recorded dead ends)" else ""
+                        finish("tryAlternates: none of ${step.options.size} options matched$deadNote ($tried)")
+                    } else {
+                        log("tryAlternates: option ${chosenIndex + 1}/${step.options.size} matched")
+                        val ok = try {
+                            click(chosen)
+                        } finally {
+                            chosen.recycle()
+                            root.recycle()
+                        }
+                        if (ok) advance(step.delayMs) else finish("tryAlternates: tap failed")
+                    }
+                }
+            }
             "confirm" -> {
                 awaitingConfirmation = true
                 // Look ahead: a CRITICAL next step upgrades this gate to a typed confirmation.
                 val nextRisk = flow.steps.getOrNull(index + 1)?.let { riskOf(it, flow.variables) }
                 val hardened = nextRisk != null && nextRisk.tier == RiskTier.CRITICAL
                 if (hardened) log("Critical next step — typed confirmation required")
+                // Fail closed if no answer ever arrives. The prompt lives in MainActivity, so a
+                // rotation or process death can destroy the (non-cancelable) dialog without an
+                // answer; awaitingConfirmation would otherwise pin this run in "Waiting for
+                // confirmation" forever, with the runtime budget powerless because it is only
+                // checked between steps. An unanswered gate expires into a denial.
+                val generation = ++confirmationGeneration
+                handler.postDelayed(
+                    {
+                        if (awaitingConfirmation && confirmationGeneration == generation && !cancelled) {
+                            finish("Confirmation timed out — action denied")
+                        }
+                    },
+                    CONFIRM_TIMEOUT_MS
+                )
                 service.requestConfirmation(step.message ?: "Allow the next workflow action?", hardened)
             }
             "tappoint", "swipe" -> {
@@ -261,6 +389,62 @@ class WorkflowRunner(
         val limit = flow.steps.size + LOOP_GUARD_SLACK
         if (visits > limit) {
             finish("Loop guard: screen ${fingerprint.take(8)} observed $visits times without structural change")
+        }
+        verifyExpectation(previous, fingerprint, packageName, snapshot.visibleLabels)
+    }
+
+    /**
+     * Evaluates a control-flow condition against a fresh observation of the current screen.
+     * Unlike the post-step check, disagreement here is *information*, not failure: a `branch`
+     * reads it as "take the fallback path" and a `repeatUntil` as "loop again".
+     *
+     * The baseline for `screenChange` is the runner's last recorded observation
+     * ([lastFingerprint]) — control reads never move it, so decisions cannot perturb the
+     * world model. `textPresent`/`textAbsent`/`package` read the live screen and are the
+     * workhorses for control conditions. Returns false when no observation is possible
+     * (screen temporarily unreadable) — a loop on missing evidence is safer than proceeding
+     * on an assumption, and missing evidence still spends hops/budget, so it terminates.
+     */
+    private fun evaluateControlEvidence(step: Step): Boolean {
+        val expectation = step.expect ?: return true
+        val root = service.root() ?: return false
+        val packageName = root.packageName?.toString().orEmpty()
+        val snapshot = try {
+            ScreenInspector.inspect(root, packageName)
+        } finally {
+            root.recycle()
+        }
+        return ExpectationChecker.check(
+            expectation,
+            ExpectationEvidence(
+                lastFingerprint, ScreenFingerprint.of(snapshot), packageName, snapshot.visibleLabels
+            )
+        ) == null
+    }
+
+    /**
+     * Consumes the armed post-step evidence check (docs/FRONTIER.md pillar 2). The previous
+     * step's declared expectations are evaluated against what this observation actually sees;
+     * a mismatch halts the run with the failing assertion named, so a silent no-op tap can
+     * never hand an unverified screen to the next step. Unreadable screens skip the check
+     * entirely (this method is only called with a captured snapshot), and an empty observation
+     * window after `launch` reads as a vacuous pass inside the checker, not here.
+     */
+    private fun verifyExpectation(
+        previous: String?,
+        fingerprint: String,
+        packageName: String,
+        visibleLabels: Set<String>
+    ) {
+        val pending = pendingExpectation
+        pendingExpectation = null
+        if (pending == null || cancelled) return
+        val (expectIndex, expectStep) = pending
+        val expectation = expectStep.expect ?: return
+        ExpectationChecker.check(
+            expectation, ExpectationEvidence(previous, fingerprint, packageName, visibleLabels)
+        )?.let { failure ->
+            finish("Step ${expectIndex + 1} evidence check failed: $failure")
         }
     }
 
@@ -341,9 +525,18 @@ class WorkflowRunner(
         val ifText = resolve(step.ifText) ?: if (step.ifText != null) return null else null
         val unlessText = resolve(step.unlessText) ?: if (step.unlessText != null) return null else null
         val message = resolve(step.message) ?: if (step.message != null) return null else null
+        // Evidence assertions resolve through the same substitution (and the same secret
+        // masking) as the step itself, so an expect on resolved text cannot leak into logs.
+        val expect = step.expect?.let { expectation ->
+            val present = resolve(expectation.textPresent)
+                ?: if (expectation.textPresent != null) return null else null
+            val absent = resolve(expectation.textAbsent)
+                ?: if (expectation.textAbsent != null) return null else null
+            expectation.copy(textPresent = present, textAbsent = absent)
+        }
         return step.copy(
             selector = Selector(text, id, description), value = value,
-            ifText = ifText, unlessText = unlessText, message = message
+            ifText = ifText, unlessText = unlessText, message = message, expect = expect
         )
     }
 
@@ -351,6 +544,15 @@ class WorkflowRunner(
         val started = SystemClock.uptimeMillis()
         fun attempt() {
             if (cancelled) return
+            // The runtime budget is also checked between steps in executeCurrent, but this seek
+            // loop can outlive it many times over on its own: one wait step with timeoutMs=60s
+            // and retries=10 keeps re-entering for over ten minutes, even against a 5s budget.
+            // Enforce the hard rail here as well so no step window can stretch a run past it.
+            val flow = workflow ?: return
+            if (SystemClock.uptimeMillis() - startedAt > flow.policy.maxRuntimeMs) {
+                finish("Runtime budget exceeded (${flow.policy.maxRuntimeMs} ms)")
+                return
+            }
             val node = find(service.root(), step.selector)
             if (node != null) {
                 val ok = try { action(node) } finally { node.recycle() }
@@ -486,5 +688,12 @@ class WorkflowRunner(
 
         /** Minimum settle time after switching apps, so the new window is attached. */
         const val LAUNCH_SETTLE_MS = 900L
+
+        /**
+         * How long a confirmation gate may sit unanswered before it resolves as a denial.
+         * Deliberately generous — the user may be reading the exact wording of a consequential
+         * step — but finite, so a lost dialog denies the run instead of freezing it.
+         */
+        const val CONFIRM_TIMEOUT_MS = 120_000L
     }
 }

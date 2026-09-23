@@ -1,11 +1,13 @@
 package ai.arena.mobet
 
 import ai.arena.mobet.automation.MobetAccessibilityService
+import ai.arena.mobet.automation.PresenceLauncher
 import ai.arena.mobet.automation.RunReminder
 import ai.arena.mobet.automation.Workflow
 import ai.arena.mobet.automation.WorkflowTransfer
 import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.security.SecretStore
+import ai.arena.mobet.ui.JsonErrorLocator
 import ai.arena.mobet.ui.JsonHighlighter
 import ai.arena.mobet.ui.MobetUi
 import ai.arena.mobet.ui.MobetUi.Row
@@ -63,6 +65,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var serviceDetail: TextView
     private lateinit var serviceDot: View
     private lateinit var serviceCard: MaterialCardView
+    private lateinit var workflowCard: MaterialCardView
     private lateinit var status: TextView
     private lateinit var editor: EditText
     private lateinit var workflowSummary: ChipGroup
@@ -74,6 +77,20 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var highlighter: JsonHighlighter
     private var highlighting = false
+
+    /** Looping "armed" cue for the service dot; cancelled whenever the service drops. */
+    private var dotBreath: android.animation.ObjectAnimator? = null
+
+    /** The most recent error-flash span, removed by reference so the highlighter is untouched. */
+    private var lastErrorFlash: android.text.style.BackgroundColorSpan? = null
+
+    /**
+     * Package of the app a recording was started in, kept so the import can write it into the
+     * workflow. Without it the recorded steps would land in a document whose `package` (and
+     * `policy.allowedPackages`) still points at whatever was there before, and the freshly
+     * recorded workflow would be rejected until hand-edited.
+     */
+    private var recordingPackage: String? = null
 
     /**
      * Debounce for the live summary chips.
@@ -115,7 +132,9 @@ class MainActivity : AppCompatActivity() {
         bindViews()
         applyWindowInsets()
         wireActions()
+        configureMotion()
         loadWorkflowSource()
+        if (savedInstanceState == null) playEntranceChoreography()
 
         ContextCompat.registerReceiver(
             this,
@@ -148,6 +167,7 @@ class MainActivity : AppCompatActivity() {
      */
     override fun onPause() {
         super.onPause()
+        dotBreath?.cancel()
         persistDraft()
     }
 
@@ -169,6 +189,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         summaryHandler.removeCallbacks(summaryTask)
         unregisterReceiver(receiver)
+        speechRecognizer?.destroy()
+        speechRecognizer = null
         super.onDestroy()
     }
 
@@ -176,6 +198,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun bindViews() {
         serviceCard = findViewById(R.id.serviceCard)
+        workflowCard = findViewById(R.id.workflowCard)
         serviceState = findViewById(R.id.serviceState)
         serviceDetail = findViewById(R.id.serviceDetail)
         serviceDot = findViewById(R.id.serviceDot)
@@ -195,6 +218,135 @@ class MainActivity : AppCompatActivity() {
                 R.id.menu_reminders -> { showReminders(); true }
                 else -> false
             }
+        }
+    }
+
+    // ── Motion ───────────────────────────────────────────────────────────────
+
+    /**
+     * True unless the user (or a test device) turned animations off globally. Every
+     * animation in this file checks this gate first so the system "remove animations"
+     * accessibility setting is respected instead of overridden.
+     */
+    private fun motionEnabled(): Boolean =
+        Settings.Global.getFloat(
+            contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f
+        ) > 0f
+
+    /**
+     * Cold-start choreography: the functional cards rise and fade in one after another
+     * (50ms stagger), ending on the pinned run bar, so a first launch reads as a guided
+     * top-to-bottom tour of the app's structure rather than a wall of controls snapping
+     * into place. Runs exactly once per process — configuration changes restore views
+     * instantly — and is skipped entirely when animations are disabled.
+     */
+    private fun playEntranceChoreography() {
+        if (!motionEnabled()) return
+        val content = (findViewById<View>(R.id.contentScroll) as? androidx.core.widget.NestedScrollView)
+            ?.getChildAt(0) as? android.view.ViewGroup ?: return
+        val targets = buildList {
+            for (i in 0 until content.childCount) add(content.getChildAt(i))
+            add(findViewById(R.id.runBar))
+        }
+        targets.forEachIndexed { index, view ->
+            view.alpha = 0f
+            view.translationY = dp(14).toFloat()
+            view.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setStartDelay(80L + index * 50L)
+                .setDuration(280)
+                .setInterpolator(android.view.animation.DecelerateInterpolator(1.4f))
+                .withLayer()
+                .start()
+        }
+    }
+
+    /**
+     * Wires the persistent micro-motion: summary chips fade in while the row rebuilds,
+     * and the workflow card's outline warms to the primary tint for as long as the
+     * editor holds focus — the two most frequent interactions get a quiet state echo.
+     * Removals stay instant so rebuilding chips after each debounced keystroke never
+     * ghosts stale labels over the new row.
+     */
+    private fun configureMotion() {
+        workflowSummary.layoutTransition = android.animation.LayoutTransition().apply {
+            enableTransitionType(android.animation.LayoutTransition.APPEARING)
+            disableTransitionType(android.animation.LayoutTransition.DISAPPEARING)
+            setDuration(android.animation.LayoutTransition.APPEARING, 180L)
+            setStartDelay(android.animation.LayoutTransition.APPEARING, 0L)
+        }
+
+        editor.setOnFocusChangeListener { _, hasFocus ->
+            val from = workflowCard.strokeColor
+            val to = ContextCompat.getColor(
+                this, if (hasFocus) R.color.mobet_primary else R.color.mobet_outline
+            )
+            if (from == to || !motionEnabled()) {
+                workflowCard.strokeColor = to
+            } else {
+                android.animation.ValueAnimator.ofObject(
+                    android.animation.ArgbEvaluator(), from, to
+                ).apply {
+                    duration = 160
+                    addUpdateListener { workflowCard.strokeColor = it.animatedValue as Int }
+                    start()
+                }
+            }
+        }
+    }
+
+    /**
+     * Washes the offending character in the danger tint, decaying over three beats before
+     * removal. Round 11 drops the caret exactly where the parser failed; the flash is
+     * what makes that landing visible on a dense line. Spans are removed by reference and
+     * the text model itself is never modified, so this coexists with the highlighter and
+     * with draft persistence (spans are not saved).
+     */
+    private fun flashErrorAt(offset: Int) {
+        if (!motionEnabled()) return
+        if (editor.text?.let { offset in it.indices } != true) return
+        val base = ContextCompat.getColor(this, R.color.mobet_danger)
+        intArrayOf(0x59, 0x38, 0x1C).forEachIndexed { step, alpha ->
+            editor.postDelayed({
+                val current = editor.text ?: return@postDelayed
+                if (offset !in current.indices) return@postDelayed
+                lastErrorFlash?.let { current.removeSpan(it) }
+                val span = android.text.style.BackgroundColorSpan(
+                    (base and 0x00FFFFFF) or (alpha shl 24)
+                )
+                current.setSpan(
+                    span, offset, offset + 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                lastErrorFlash = span
+            }, step * 150L)
+        }
+        editor.postDelayed({
+            lastErrorFlash?.let { editor.text?.removeSpan(it) }
+            lastErrorFlash = null
+        }, 520L)
+    }
+
+    /**
+     * While automation is armed the service dot breathes on a slow cycle: the glance that
+     * answers "is it live right now?" gets a persistent cue that does not rely on colour
+     * alone. The loop is cancelled the moment the service drops, when animations are off,
+     * or when the activity pauses, and the alpha reset happens before recreation so this
+     * never fights the enable/disable pop.
+     */
+    private fun updateDotBreathing(enabled: Boolean) {
+        if (enabled && motionEnabled() && dotBreath?.isRunning == true) return
+        dotBreath?.cancel()
+        dotBreath = null
+        serviceDot.alpha = 1f
+        if (!enabled || !motionEnabled()) return
+        dotBreath = android.animation.ObjectAnimator.ofFloat(
+            serviceDot, View.ALPHA, 1f, 0.55f
+        ).apply {
+            duration = 1400
+            repeatMode = android.animation.ValueAnimator.REVERSE
+            repeatCount = android.animation.ValueAnimator.INFINITE
+            start()
         }
     }
 
@@ -297,9 +449,26 @@ class MainActivity : AppCompatActivity() {
         workflowSummary.removeAllViews()
         val source = editor.text?.toString().orEmpty()
         if (source.isBlank()) return
-        val workflow = runCatching { Workflow.parse(source) }.getOrNull()
+        val parsed = runCatching { Workflow.parse(source) }
+        val workflow = parsed.getOrNull()
         if (workflow == null) {
-            addChip("Invalid JSON", Tone.DANGER, R.drawable.ic_warning)
+            // Point at the breakage instead of just naming it: org.json reports a character
+            // offset, the locator turns it into a line/column, and tapping the chip drops the
+            // editor caret exactly there. Semantic errors carry no offset, so they fall back
+            // to the message head.
+            val errorMessage = parsed.exceptionOrNull()?.message
+            val location = JsonErrorLocator.locate(source, errorMessage)
+            val label = "Invalid JSON" +
+                (location?.let { " · line ${it.line}, col ${it.column}" }
+                    ?: errorMessage?.let { " · ${it.lineSequence().first().take(48)}" }.orEmpty())
+            addChip(label, Tone.DANGER, R.drawable.ic_warning) {
+                location?.let {
+                    editor.requestFocus()
+                    editor.setSelection(it.offset)
+                    flashErrorAt(it.offset)
+                }
+                showStatus("Invalid JSON: ${errorMessage ?: "parse error"}", Tone.DANGER)
+            }
             return
         }
         workflow.packageName?.let { addChip(it.substringAfterLast('.'), Tone.NEUTRAL) }
@@ -308,16 +477,24 @@ class MainActivity : AppCompatActivity() {
         if (workflow.policy.allowVisualFallbacks) addChip("Visual fallback", Tone.WARNING)
         if (workflow.policy.allowSelfHealing) addChip("Self-healing", Tone.NEUTRAL)
         val violations = runCatching { PlanValidator.validate(workflow) }.getOrDefault(emptyList())
-        if (violations.isEmpty()) addChip("Policy OK", Tone.SUCCESS, R.drawable.ic_check)
-        else addChip("${violations.size} policy issue${if (violations.size == 1) "" else "s"}",
-            Tone.DANGER, R.drawable.ic_warning)
+        if (violations.isEmpty()) {
+            addChip("Policy OK", Tone.SUCCESS, R.drawable.ic_check)
+        } else {
+            // The chip summarizes; the full violation list lives one tap away in the
+            // validation report rather than hidden behind a manual menu trip.
+            addChip(
+                "${violations.size} policy issue${if (violations.size == 1) "" else "s"}",
+                Tone.DANGER, R.drawable.ic_warning
+            ) { validatePlan() }
+        }
     }
 
-    private fun addChip(label: String, tone: Tone, icon: Int? = null) {
+    private fun addChip(label: String, tone: Tone, icon: Int? = null, onClick: (() -> Unit)? = null) {
         val chip = Chip(this).apply {
             text = label
-            isClickable = false
+            isClickable = onClick != null
             isCheckable = false
+            if (onClick != null) setOnClickListener { onClick() }
             chipMinHeight = dp(28).toFloat()
             setEnsureMinTouchTargetSize(false)
             textSize = 11f
@@ -486,6 +663,9 @@ class MainActivity : AppCompatActivity() {
         showStatus("Running on-device OCR…")
         ai.arena.mobet.vision.OnDeviceTextRecognizer.recognize(bitmap) { result ->
             bitmap.recycle()
+            // OCR completes asynchronously; the user may have backgrounded Mobet meanwhile,
+            // and showing a dialog for a destroyed activity crashes with a window-token error.
+            if (isFinishing || isDestroyed) return@recognize
             showBusy(false)
             result.onSuccess { lines ->
                 val sheet = MobetUi.ReportSheet(this)
@@ -615,8 +795,47 @@ class MainActivity : AppCompatActivity() {
             showStatus("Autonomous run stopped from notification", Tone.WARNING)
             return
         }
+        handlePresenceRun(value)
+        handleViewImport(value)
         openWorkflowFromReminder(value)
         handleConfirmation(value)
+    }
+
+    /**
+     * QS tile / launcher shortcut (docs/FRONTIER.md pillar 4): the click is the user's
+     * explicit gesture, so the pinned workflow is loaded and run immediately — the ordinary
+     * pipeline still applies, including every confirmation gate. Without a pin the gesture
+     * opens the library so the user can pin what the tile should fire.
+     */
+    private fun handlePresenceRun(value: Intent?) {
+        if (value?.action != PresenceLauncher.ACTION_RUN_PINNED) return
+        intent.action = null
+        val pinned = PresenceLauncher.resolve(this)
+        if (pinned == null) {
+            showStatus(
+                "Nothing is pinned to the shade yet — run a workflow, or pin one from its library sheet",
+                Tone.WARNING
+            )
+            loadFromLibrary()
+            return
+        }
+        editor.setText(pinned.source)
+        persistDraft()
+        showStatus("Running pinned workflow “${pinned.name}”", Tone.SUCCESS)
+        runWorkflow()
+    }
+
+    /**
+     * Share-target intake: a `.mobet.json` bundle (or any JSON document) opened into Mobet
+     * from a file manager or another app. The review sheet is the same one the in-app picker
+     * uses — stream-capped read, per-entry validation, explicit Import — so this surface adds
+     * no new trust decisions, only a new route to the existing ones (docs/THREAT_MODEL.md).
+     */
+    private fun handleViewImport(value: Intent?) {
+        if (value?.action != Intent.ACTION_VIEW) return
+        val uri = value.data ?: return
+        intent.action = null
+        previewImport(uri)
     }
 
     private fun handleConfirmation(value: Intent?) {
@@ -806,6 +1025,7 @@ class MainActivity : AppCompatActivity() {
                     "stay authoritative — it abstains when confidence is insufficient."
             )
             .setView(MobetUi.formContainer(this, goal.layout, evidence.layout, ocr, model))
+            .setNeutralButton("🎙 Dictate") { _, _ -> }
             .setPositiveButton("Start run") { _, _ ->
                 if (goal.value.isBlank() || evidence.value.isBlank()) {
                     showStatus("Goal and exact completion evidence are required", Tone.DANGER)
@@ -824,6 +1044,139 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.action_cancel, null)
             .show()
+            .apply {
+                // Keep the review dialog open for dictation: a neutral button would normally
+                // dismiss it. The transcript lands IN the field — dictation is an input
+                // method, never execution authority (docs/THREAT_MODEL.md).
+                getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                    dictateGoal(goal)
+                }
+            }
+    }
+
+    // ── Voice goals (1.0; RECORD_AUDIO, on-device only) ─────────────────────
+
+    private var speechRecognizer: android.speech.SpeechRecognizer? = null
+    private var dictationDialog: androidx.appcompat.app.AlertDialog? = null
+
+    /**
+     * Voice goals, gated as docs/FRONTIER.md demands: off by default (nothing happens until
+     * the user taps Dictate), the only microphone use is an *on-device* recognizer (the cloud
+     * fallback is refused, not used), and the transcript is placed in the goal field for the
+     * user to review and edit — it never starts a run by itself.
+     */
+    private fun dictateGoal(target: MobetUi.Field) {
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO)
+            showStatus(
+                "Microphone needed once for dictation — audio is recognized on this device only",
+                Tone.WARNING
+            )
+            return
+        }
+        // Gate: below 31 there is no on-device recognizer at all; from 34 the static
+        // availability check answers up front; on 31–33 the recognizer's own error path
+        // reports unsupported (mapped in onError), so the cloud fallback is never consulted.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            (Build.VERSION.SDK_INT >= 34 &&
+                !android.speech.SpeechRecognizer.isOnDeviceRecognitionAvailable(this))
+        ) {
+            showStatus(
+                "On-device speech recognition is unavailable on this device — type the goal instead",
+                Tone.WARNING
+            )
+            return
+        }
+        startDictation(target)
+    }
+
+    private fun startDictation(target: MobetUi.Field) {
+        // Lint-visible guard (the caller already gates): the on-device recognizer exists
+        // from API 31, and NewApi tracking does not cross method boundaries.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        speechRecognizer?.destroy()
+        val recognizer = android.speech.SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+        speechRecognizer = recognizer
+        val dialog = MobetUi.dialog(this)
+            .setTitle("Listening")
+            .setIcon(R.drawable.ic_record)
+            .setMessage("Speak the goal.\n\nRecognized entirely on this device.")
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+        dialog.setOnDismissListener {
+            speechRecognizer?.destroy()
+            speechRecognizer = null
+            dictationDialog = null
+        }
+        dictationDialog = dialog
+
+        recognizer.setRecognitionListener(object : android.speech.RecognitionListener {
+            override fun onResults(results: Bundle) {
+                val heard = results
+                    .getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull().orEmpty().trim()
+                dialog.dismiss()
+                if (heard.isEmpty()) showStatus("Did not catch that — try again", Tone.WARNING)
+                else {
+                    target.input.setText(heard)
+                    target.input.setSelection(heard.length)
+                    showStatus("Heard “$heard” — review it, then start the run", Tone.SUCCESS)
+                }
+            }
+
+            override fun onPartialResults(partialResults: Bundle) {
+                val partial = partialResults
+                    .getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull().orEmpty()
+                if (partial.isNotBlank()) dictationDialog?.setMessage("Speak the goal.\n\n$partial")
+            }
+
+            override fun onError(error: Int) {
+                dialog.dismiss()
+                val why = when (error) {
+                    android.speech.SpeechRecognizer.ERROR_NO_MATCH,
+                    android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech recognized"
+                    android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
+                        "Microphone permission missing"
+                    else -> "Recognition unavailable right now"
+                }
+                showStatus("$why — type the goal instead", Tone.WARNING)
+            }
+
+            override fun onReadyForSpeech(params: Bundle?) = Unit
+            override fun onBeginningOfSpeech() = Unit
+            override fun onRmsChanged(rmsdB: Float) = Unit
+            override fun onBufferReceived(buffer: ByteArray?) = Unit
+            override fun onEndOfSpeech() = Unit
+            override fun onEvent(eventType: Int, params: Bundle?) = Unit
+        })
+        recognizer.startListening(
+            android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                .putExtra(
+                    android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                )
+                .putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        )
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_RECORD_AUDIO) {
+            val granted = grantResults.firstOrNull() ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            showStatus(
+                if (granted) "Microphone granted — tap 🎙 Dictate again"
+                else "No microphone; voice goals stay off — typing works as always",
+                if (granted) Tone.SUCCESS else Tone.WARNING
+            )
+        }
     }
 
     private fun showGoalPlanner() {
@@ -1166,6 +1519,11 @@ class MainActivity : AppCompatActivity() {
                     showStatus("Loaded “$name”", Tone.SUCCESS)
                 }
                 .action("Remind me") { scheduleReminder(name) }
+                .action("Pin to shade") {
+                    val source = library.getString(name, null) ?: return@action
+                    PresenceLauncher.pin(this@MainActivity, name, source)
+                    showStatus("Pinned “$name” — the QS tile and launcher shortcut now run it", Tone.SUCCESS)
+                }
                 .action(getString(R.string.action_delete), destructive = true) {
                     confirmDestructive(
                         "Delete “$name”?",
@@ -1285,11 +1643,13 @@ class MainActivity : AppCompatActivity() {
             rows = apps.map { appRow(it) }
         ) { index ->
             val app = apps[index]
-            service.startRecording()
-            if (!service.launchTarget(app.packageName)) {
-                showStatus("Could not launch ${app.label}", Tone.DANGER)
-            } else {
+            recordingPackage = if (service.launchTarget(app.packageName)) {
+                service.startRecording()
                 showStatus("Recording in ${app.label} — return and tap Stop to import", Tone.SUCCESS)
+                app.packageName
+            } else {
+                showStatus("Could not launch ${app.label}", Tone.DANGER)
+                null
             }
         }
     }
@@ -1297,6 +1657,8 @@ class MainActivity : AppCompatActivity() {
     private fun importRecordedSteps(source: String) {
         try {
             val recorded = JSONArray(source)
+            val target = recordingPackage
+            recordingPackage = null
             if (recorded.length() == 0) {
                 showStatus("Stopped. No recorded taps to import")
                 return
@@ -1304,8 +1666,25 @@ class MainActivity : AppCompatActivity() {
             val root = JSONObject(editor.text.toString())
             val steps = root.optJSONArray("steps") ?: JSONArray().also { root.put("steps", it) }
             for (i in 0 until recorded.length()) steps.put(recorded.getJSONObject(i))
+            // Point the workflow at the app the recording was captured in: set the target when
+            // the document does not already name one, and always widen the package allowlist.
+            if (target != null) {
+                if (root.optString("package").isBlank()) root.put("package", target)
+                val policy = root.optJSONObject("policy") ?: JSONObject().also { root.put("policy", it) }
+                val allowed = policy.optJSONArray("allowedPackages")
+                    ?: JSONArray().also { policy.put("allowedPackages", it) }
+                var alreadyAllowed = false
+                for (i in 0 until allowed.length()) {
+                    if (allowed.getString(i) == target) { alreadyAllowed = true; break }
+                }
+                if (!alreadyAllowed) allowed.put(target)
+            }
             editor.setText(root.toString(2))
-            showStatus("Imported ${recorded.length()} recorded steps", Tone.SUCCESS)
+            showStatus(
+                "Imported ${recorded.length()} recorded steps" +
+                    if (target != null) " — target allowlist includes $target" else "",
+                Tone.SUCCESS
+            )
         } catch (error: Exception) {
             showStatus("Could not import recording: ${error.message}", Tone.DANGER)
         }
@@ -1319,6 +1698,9 @@ class MainActivity : AppCompatActivity() {
             val source = editor.text.toString()
             val workflow = Workflow.parse(source)
             persistDraft()
+            // The run is the strongest signal of what the QS tile/shortcut should fire:
+            // every successful start re-pins it (docs/FRONTIER.md pillar 4).
+            PresenceLauncher.pin(this, workflow.name, source)
             showBusy(true)
             service.run(workflow)
         } catch (error: Exception) {
@@ -1335,7 +1717,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         service.stopRun()
-        importRecordedSteps(service.stopRecording())
+        // Only import when a capture was actually running; otherwise every plain Stop
+        // surfaced a confusing "No recorded taps to import" message.
+        if (service.isRecording()) importRecordedSteps(service.stopRecording())
     }
 
     /** Nudges the user to the one setting that unblocks everything else. */
@@ -1370,6 +1754,11 @@ class MainActivity : AppCompatActivity() {
                 .withEndAction {
                     serviceDot.animate().scaleX(1f).scaleY(1f).setDuration(220).start()
                 }.start()
+            // The animation tells sighted users the gate opened/closed; a screen reader needs
+            // the same transition announced or it simply never happened for them.
+            serviceCard.announceForAccessibility(
+                getString(if (enabled) R.string.service_enabled else R.string.service_disabled)
+            )
         }
         lastServiceEnabled = enabled
         // Both the shortcut and the restricted-settings explainer are only useful while the
@@ -1551,6 +1940,9 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val ACTION_STOP_AUTONOMY = "ai.arena.mobet.STOP_AUTONOMY"
         const val ACTION_OPEN_WORKFLOW = "ai.arena.mobet.OPEN_WORKFLOW"
+
+        /** Runtime-permission request code for voice-goal dictation (RECORD_AUDIO). */
+        const val REQUEST_RECORD_AUDIO = 42
 
         /**
          * Minimal valid workflow, used only if the bundled sample asset cannot be read.

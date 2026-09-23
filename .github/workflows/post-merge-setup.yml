@@ -1,0 +1,84 @@
+name: Post-merge repo setup
+
+# One-click automation for the one-time repository settings in docs/PRODUCTION.md §2.
+# Dispatch it from the Actions tab after the production PR lands on main. Every step is
+# idempotent, so a re-run is a verification pass, not a second change.
+#
+# What the workflow token can and cannot do is a GitHub platform property, not a choice:
+#   - Dependency graph: enabled by default on public repositories — verified, not set.
+#   - Pin dependency checksums: dispatched with the built-in GITHUB_TOKEN (actions: write),
+#     which is explicitly permitted to trigger workflow_dispatch runs.
+#   - Branch protection: requires an admin-scoped token, which GITHUB_TOKEN never has.
+#     The step attempts it (harmless 403 when declined) and prints the exact maintainer
+#     command; scripts/post-merge-setup.sh applies it in one local run.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  setup:
+    name: Apply verifiable settings
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify dependency graph (default-on for public repos)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VISIBILITY="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility)"
+          if [ "$VISIBILITY" = "public" ]; then
+            echo "Repository is public: the dependency graph is enabled by default."
+          else
+            echo "Repository is $VISIBILITY: dependency graph must be enabled in Settings."
+            echo "::warning title=Dependency graph::Private repo — enable it via Settings > Code security and analysis, or run scripts/post-merge-setup.sh with a maintainer login."
+          fi
+
+      - name: Branch protection on main (best-effort with GITHUB_TOKEN)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BODY='{
+            "required_status_checks": {
+              "strict": false,
+              "contexts": [
+                "Build & JVM unit tests",
+                "Connected device tests",
+                "CodeQL Java and Kotlin",
+                "Dependency review"
+              ]
+            },
+            "enforce_admins": false,
+            "required_pull_request_reviews": {
+              "dismiss_stale_reviews": false,
+              "require_code_owner_reviews": false,
+              "required_approving_review_count": 0
+            },
+            "restrictions": null,
+            "required_linear_history": false,
+            "allow_force_pushes": false,
+            "allow_deletions": false
+          }'
+          if gh api -X PUT "repos/${GITHUB_REPOSITORY}/branches/main/protection" --input - <<<"$BODY"; then
+            echo "Branch protection applied to main."
+          else
+            echo "GITHUB_TOKEN has no administration scope (expected HTTP 403)."
+            printf '%s\n' \
+              "::warning title=Branch protection::Requires a maintainer-scoped token. Run once: bash scripts/post-merge-setup.sh"
+          fi
+
+      - name: Dispatch Pin dependency checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXISTING="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/pin-dependencies.yml/runs" --jq '.workflow_runs | length')"
+          if [ "$EXISTING" != "0" ]; then
+            echo "pin-dependencies.yml already has $EXISTING run(s); leaving history untouched."
+            exit 0
+          fi
+          DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch)"
+          gh api -X POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/pin-dependencies.yml/dispatches" \
+            -f "ref=$DEFAULT_BRANCH"
+          echo "Pin dependency checksums dispatched on $DEFAULT_BRANCH."

@@ -9,6 +9,33 @@ data class Selector(
     val description: String? = null
 )
 
+/**
+ * Post-step evidence assertions (verified execution — docs/FRONTIER.md pillar 2).
+ *
+ * A step may declare what the screen must look like *after* it executes: a structural change,
+ * text that must be present or gone, and/or the package that must be active. The next screen
+ * observation after the step is checked by [ExpectationChecker]; a mismatch halts the run
+ * with a named reason instead of letting later steps act on an unverified state.
+ *
+ * Screening is single-shot: the check runs once, at the first observation after the step,
+ * because later observations belong to later steps. Timing-sensitive assertions belong in a
+ * `wait`/`ocrwait` step before the asserting step.
+ */
+data class Expectation(
+    /** The screen fingerprint must differ from the pre-step baseline (vacuous without one). */
+    val screenChange: Boolean = false,
+    /** Case-insensitive substring that must appear among visible accessibility labels. */
+    val textPresent: String? = null,
+    /** Case-insensitive substring that must NOT appear among visible accessibility labels. */
+    val textAbsent: String? = null,
+    /** The active package after the step; PlanValidator requires membership in allowedPackages. */
+    val packageIs: String? = null
+) {
+    /** A block with no assertions is an authoring error flagged by PlanValidator. */
+    val isEmpty: Boolean
+        get() = !screenChange && textPresent == null && textAbsent == null && packageIs == null
+}
+
 data class Step(
     val action: String,
     val selector: Selector = Selector(),
@@ -31,7 +58,19 @@ data class Step(
     val yPercent: Double? = null,
     val endXPercent: Double? = null,
     val endYPercent: Double? = null,
-    val durationMs: Long = 400
+    val durationMs: Long = 400,
+    /** Optional post-step evidence assertions; null means "no verification declared". */
+    val expect: Expectation? = null,
+    /** Jump target name for `branch`/`repeatUntil`; labels must be unique across steps. */
+    val label: String? = null,
+    /** Label to jump to (branch when satisfied; repeatUntil while unsatisfied). */
+    val goto: String? = null,
+    /** Optional label for the unsatisfied path of `branch` (defaults to the next step). */
+    val elseGoto: String? = null,
+    /** Iteration cap for `repeatUntil`; coerced to 1..50 at parse time. */
+    val maxIterations: Int = 10,
+    /** Candidate selectors for `tryAlternates`; first match is tapped. 1..8 entries. */
+    val options: List<Selector> = emptyList()
 )
 
 data class Workflow(
@@ -45,10 +84,20 @@ data class Workflow(
         fun parse(source: String): Workflow {
             val root = JSONObject(source)
             val variablesObject = root.optJSONObject("variables") ?: JSONObject()
+            require(variablesObject.length() <= MAX_VARIABLES) {
+                "Workflow has ${variablesObject.length()} variables; the limit is $MAX_VARIABLES"
+            }
             val variables = buildMap {
                 variablesObject.keys().forEach { key -> put(key, variablesObject.getString(key)) }
             }
             val items = root.getJSONArray("steps")
+            // Bound before materializing: the editor re-parses the whole document on every
+            // keystroke to refresh its summary chips, and policy.maxActions caps execution at
+            // 200 anyway, so a larger document can never run — it could only make the main
+            // thread grind. Fail the parse early with a clear message instead.
+            require(items.length() <= MAX_STEPS) {
+                "Workflow has ${items.length()} steps; the limit is $MAX_STEPS"
+            }
             val steps = buildList {
                 for (i in 0 until items.length()) {
                     val item = items.getJSONObject(i)
@@ -72,7 +121,20 @@ data class Workflow(
                             yPercent = percent(item, "yPercent"),
                             endXPercent = percent(item, "endXPercent"),
                             endYPercent = percent(item, "endYPercent"),
-                            durationMs = item.optLong("durationMs", 400).coerceIn(50, 5_000)
+                            durationMs = item.optLong("durationMs", 400).coerceIn(50, 5_000),
+                            expect = item.optJSONObject("expect")?.let { expectation ->
+                                Expectation(
+                                    screenChange = expectation.optBoolean("screenChange", false),
+                                    textPresent = optional(expectation, "textPresent"),
+                                    textAbsent = optional(expectation, "textAbsent"),
+                                    packageIs = optional(expectation, "package")
+                                )
+                            },
+                            label = optional(item, "label"),
+                            goto = optional(item, "goto"),
+                            elseGoto = optional(item, "elseGoto"),
+                            maxIterations = item.optInt("maxIterations", 10).coerceIn(1, 50),
+                            options = parseOptions(item)
                         )
                     )
                 }
@@ -103,6 +165,29 @@ data class Workflow(
         private fun optional(objectValue: JSONObject, key: String): String? =
             objectValue.optString(key).takeIf(String::isNotBlank)
 
+        /**
+         * Candidate selectors of a `tryAlternates` step. Bounded like steps themselves: the
+         * editor re-parses on every keystroke, so option lists cannot be unbounded either.
+         */
+        private fun parseOptions(item: JSONObject): List<Selector> {
+            val array = item.optJSONArray("options") ?: return emptyList()
+            require(array.length() in 1..MAX_OPTIONS) {
+                "tryAlternates has ${array.length()} options; the limit is $MAX_OPTIONS"
+            }
+            return buildList {
+                for (i in 0 until array.length()) {
+                    val option = array.getJSONObject(i)
+                    add(
+                        Selector(
+                            text = optional(option, "text"),
+                            viewId = optional(option, "viewId"),
+                            description = optional(option, "description")
+                        )
+                    )
+                }
+            }
+        }
+
         private fun percent(objectValue: JSONObject, key: String): Double? =
             if (objectValue.has(key)) objectValue.getDouble(key).coerceIn(0.02, 0.98) else null
 
@@ -110,5 +195,10 @@ data class Workflow(
             val array = objectValue.optJSONArray(key) ?: return fallback
             return buildSet { for (i in 0 until array.length()) add(array.getString(i)) }
         }
+
+        /** Hard parse-time bounds; see the comments at their enforcement points. */
+        const val MAX_STEPS = 200
+        const val MAX_VARIABLES = 100
+        const val MAX_OPTIONS = 8
     }
 }

@@ -30,6 +30,10 @@ class InteractionRecorder(private val ownPackage: String) {
 
     fun observe(event: AccessibilityEvent): Boolean {
         if (!active || event.packageName?.toString() == ownPackage) return false
+        // Bound the capture. A workflow can never exceed 200 steps (Workflow.MAX_STEPS), so
+        // recording past the useful window would only grow an in-memory list during a long
+        // session and import steps that fail policy anyway.
+        if (steps.size >= MAX_RECORDED_STEPS) return false
         val action = when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_CLICKED -> "tap"
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> "scroll"
@@ -69,5 +73,10 @@ class InteractionRecorder(private val ownPackage: String) {
         }
         node?.recycle()
         return null
+    }
+
+    private companion object {
+        /** Same ceiling as a runnable plan; see the note in [observe]. */
+        const val MAX_RECORDED_STEPS = 50
     }
 }
