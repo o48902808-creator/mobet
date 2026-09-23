@@ -143,6 +143,18 @@ android {
         }
     }
 
+    packaging {
+        resources.excludes += setOf(
+            "META-INF/DEPENDENCIES",
+            "META-INF/LICENSE",
+            "META-INF/LICENSE.txt",
+            "META-INF/NOTICE",
+            "META-INF/NOTICE.txt",
+            "META-INF/INDEX.LIST",
+            "META-INF/io.netty.versions.properties"
+        )
+    }
+
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
