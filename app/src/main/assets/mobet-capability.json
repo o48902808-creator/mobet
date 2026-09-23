@@ -11,12 +11,12 @@
   "policyVersion": "deterministic-policy.v1",
   "ledgerSchemaVersion": "mobet.ledger.v1/hash-chain.v2",
   "modelEngine": "AICore Gemini Nano (optional) + deterministic local fallback",
-  "voiceEngine": "Android on-device SpeechRecognizer",
+  "voiceEngine": "Offline VoiceEngine: Android on-device + optional local model pack",
   "invariants": [
     "no-network-permission",
     "deterministic-policy-authority",
     "hash-chained-ledger",
     "model-output-is-untrusted"
   ],
-  "manifestSha256": "0a890f13418da382c2eaadc9a4fe5f03f1dba0a4891a94e0a7dd14dd59b38cb6"
+  "manifestSha256": "c20bf976ed8c2c067b4a6ec0393d17c1fae1ec6fd9b16c3cb97a680718be3703"
 }

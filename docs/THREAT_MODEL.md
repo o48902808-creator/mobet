@@ -146,17 +146,17 @@ The single new mic use: dictating an autonomous goal, and only under these locks
 - **Opt-in twice over.** Nothing listens until the user taps 🎙 Dictate inside the goal
   dialog, and Android must grant `RECORD_AUDIO` at runtime first. Deny and the app is
   unchanged — the tap explains the outcome and typing works as always.
-- **On-device or not at all.** Only `createOnDeviceSpeechRecognizer` is used: prechecked by
-  `isOnDeviceRecognitionAvailable` on API 34+, and on 31–33 covered by the recognizer's own
-  error path. Devices without an on-device backend get a clear "type instead" message; the
-  cloud-recognition fallback is refused, not used, so audio never leaves the phone and the
-  no-network invariant is not even load-bearing here.
+- **On-device or not at all.** `VoiceEngines` selects only `AndroidOnDeviceVoiceEngine`, which
+  requires `isOnDeviceRecognitionAvailable` and uses `createOnDeviceSpeechRecognizer`; otherwise
+  it returns `UnavailableVoiceEngine`. The generic recognizer factory is never called. Optional
+  local PCM model packs have no network authority and clear their mutable audio buffer in `finally`.
 - **Input, never authority.** The transcript is dropped into the goal field for the user to
   read and edit; it cannot start a run, fill completion evidence, or bypass any gate. From
   the first character of review onward it is user-authored text, held to exactly the trust
   class of typed input.
-- **No persistence.** The recognizer is destroyed on result, error, dismiss, and activity
-  destruction; no audio or transcript is stored.
+- **No persistence.** Cancellation is lifecycle-bound; the recognizer is cancelled and destroyed
+  on result, error, dismiss, and activity destruction. Transcript text is not logged, and optional
+  local-engine PCM buffers are zeroed after every attempt.
 
 ## Non-goals and residual risks
 

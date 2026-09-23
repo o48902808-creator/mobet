@@ -212,11 +212,11 @@ silently repaired.
 
 ## Pillar 6 — Voice and safe tool calling
 
-Voice is now treated as an input modality, not an authority. Mobet uses Android's on-device
-`SpeechRecognizer` when available (with explicit microphone consent); cloud recognition is never
-a fallback. A future bundled Whisper/Vosk backend is compatible with this contract only if its
-model is shipped locally, its size and battery budget are accepted, and recognition output still
-requires review. Streaming audio must never be retained by default.
+Voice is now treated as an input modality, not an authority. `VoiceEngine` has Android on-device,
+optional local-PCM model-pack, and explicit unavailable implementations. Cloud recognition is
+never a fallback. Mutable PCM is zeroed in `finally`, Android recognition is lifecycle-cancelled,
+and transcript contents are not logged. A Whisper/Vosk model remains an optional separate pack
+because its size, memory, battery, and cold-start costs are not acceptable as a mandatory backend.
 
 The agent now has a typed `ToolCall`/`ToolRegistry` boundary. Every tool declares typed input and
 bounded output schemas, package scope, risk, exact-call confirmation requirements, and autonomous

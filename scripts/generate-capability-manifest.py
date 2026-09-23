@@ -44,7 +44,7 @@ def main() -> None:
         "policyVersion": "deterministic-policy.v1",
         "ledgerSchemaVersion": "mobet.ledger.v1/hash-chain.v2",
         "modelEngine": "AICore Gemini Nano (optional) + deterministic local fallback",
-        "voiceEngine": "Android on-device SpeechRecognizer",
+        "voiceEngine": "Offline VoiceEngine: Android on-device + optional local model pack",
         "invariants": [
             "no-network-permission",
             "deterministic-policy-authority",

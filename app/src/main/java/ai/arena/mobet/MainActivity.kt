@@ -19,6 +19,8 @@ import ai.arena.mobet.ui.MobetUi
 import ai.arena.mobet.ui.MobetUi.Row
 import ai.arena.mobet.ui.MobetUi.Tone
 import ai.arena.mobet.ui.MobetUi.dp
+import ai.arena.mobet.voice.AudioInput
+import ai.arena.mobet.voice.VoiceEngines
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -51,6 +53,7 @@ import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.progressindicator.CircularProgressIndicator
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -209,8 +212,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         summaryHandler.removeCallbacks(summaryTask)
         unregisterReceiver(receiver)
-        speechRecognizer?.destroy()
-        speechRecognizer = null
+        voiceJob?.cancel()
+        voiceJob = null
         super.onDestroy()
     }
 
@@ -1223,15 +1226,10 @@ class MainActivity : AppCompatActivity() {
 
     // ── Voice goals (1.0; RECORD_AUDIO, on-device only) ─────────────────────
 
-    private var speechRecognizer: android.speech.SpeechRecognizer? = null
+    private var voiceJob: Job? = null
     private var dictationDialog: androidx.appcompat.app.AlertDialog? = null
 
-    /**
-     * Voice goals, gated as docs/FRONTIER.md demands: off by default (nothing happens until
-     * the user taps Dictate), the only microphone use is an *on-device* recognizer (the cloud
-     * fallback is refused, not used), and the transcript is placed in the goal field for the
-     * user to review and edit — it never starts a run by itself.
-     */
+    /** Voice is an input method only: explicit permission, offline engine, editable transcript. */
     private fun dictateGoal(target: MobetUi.Field) {
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
             android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -1243,90 +1241,52 @@ class MainActivity : AppCompatActivity() {
             )
             return
         }
-        // Gate: below 31 there is no on-device recognizer at all; from 34 the static
-        // availability check answers up front; on 31–33 the recognizer's own error path
-        // reports unsupported (mapped in onError), so the cloud fallback is never consulted.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-            (Build.VERSION.SDK_INT >= 34 &&
-                !android.speech.SpeechRecognizer.isOnDeviceRecognitionAvailable(this))
-        ) {
-            showStatus(
-                "On-device speech recognition is unavailable on this device — type the goal instead",
-                Tone.WARNING
-            )
+        val engine = VoiceEngines.select(applicationContext)
+        if (!engine.isAvailable) {
+            showStatus("No offline voice engine is available — type the goal instead", Tone.WARNING)
             return
         }
-        startDictation(target)
-    }
-
-    private fun startDictation(target: MobetUi.Field) {
-        // Lint-visible guard (the caller already gates): the on-device recognizer exists
-        // from API 31, and NewApi tracking does not cross method boundaries.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        speechRecognizer?.destroy()
-        val recognizer = android.speech.SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-        speechRecognizer = recognizer
+        voiceJob?.cancel()
         val dialog = MobetUi.dialog(this)
             .setTitle("Listening")
             .setIcon(R.drawable.ic_record)
-            .setMessage("Speak the goal.\n\nRecognized entirely on this device.")
+            .setMessage("Speak the goal.\n\nRecognized entirely on this device; audio is not retained.")
             .setNegativeButton(R.string.action_cancel, null)
             .show()
-        dialog.setOnDismissListener {
-            speechRecognizer?.destroy()
-            speechRecognizer = null
-            dictationDialog = null
-        }
         dictationDialog = dialog
-
-        recognizer.setRecognitionListener(object : android.speech.RecognitionListener {
-            override fun onResults(results: Bundle) {
-                val heard = results
-                    .getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull().orEmpty().trim()
+        dialog.setOnDismissListener {
+            if (dictationDialog === dialog) {
+                voiceJob?.cancel()
+                voiceJob = null
+                dictationDialog = null
+            }
+        }
+        voiceJob = lifecycleScope.launch {
+            runCatching {
+                engine.transcribe(AudioInput.Microphone { partial ->
+                    if (!isFinishing && !isDestroyed) {
+                        dialog.setMessage("Speak the goal.\n\n${partial.take(500)}")
+                    }
+                })
+            }.onSuccess { transcript ->
+                // Dismiss first so its cancellation hook cannot affect a later session.
+                dictationDialog = null
                 dialog.dismiss()
-                if (heard.isEmpty()) showStatus("Did not catch that — try again", Tone.WARNING)
-                else {
-                    target.input.setText(heard)
-                    target.input.setSelection(heard.length)
-                    showStatus("Heard “$heard” — review it, then start the run", Tone.SUCCESS)
-                }
-            }
-
-            override fun onPartialResults(partialResults: Bundle) {
-                val partial = partialResults
-                    .getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull().orEmpty()
-                if (partial.isNotBlank()) dictationDialog?.setMessage("Speak the goal.\n\n$partial")
-            }
-
-            override fun onError(error: Int) {
-                dialog.dismiss()
-                val why = when (error) {
-                    android.speech.SpeechRecognizer.ERROR_NO_MATCH,
-                    android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech recognized"
-                    android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
-                        "Microphone permission missing"
-                    else -> "Recognition unavailable right now"
-                }
-                showStatus("$why — type the goal instead", Tone.WARNING)
-            }
-
-            override fun onReadyForSpeech(params: Bundle?) = Unit
-            override fun onBeginningOfSpeech() = Unit
-            override fun onRmsChanged(rmsdB: Float) = Unit
-            override fun onBufferReceived(buffer: ByteArray?) = Unit
-            override fun onEndOfSpeech() = Unit
-            override fun onEvent(eventType: Int, params: Bundle?) = Unit
-        })
-        recognizer.startListening(
-            android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                .putExtra(
-                    android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                target.input.setText(transcript.text)
+                target.input.setSelection(transcript.text.length)
+                // Never echo transcript text into diagnostics or the persistent ledger.
+                showStatus(
+                    "Offline transcript ready — review and edit it before starting the run",
+                    Tone.SUCCESS
                 )
-                .putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        )
+            }.onFailure { error ->
+                if (error is kotlinx.coroutines.CancellationException) return@onFailure
+                dictationDialog = null
+                dialog.dismiss()
+                showStatus("${error.message ?: "Recognition unavailable"} — type the goal instead", Tone.WARNING)
+            }
+            voiceJob = null
+        }
     }
 
     override fun onRequestPermissionsResult(

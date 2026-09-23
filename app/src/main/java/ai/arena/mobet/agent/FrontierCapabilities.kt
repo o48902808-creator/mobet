@@ -68,14 +68,3 @@ object ToolPlanGate {
     fun validate(calls: List<ToolCall>, specs: List<ToolSpec>, confirmed: Set<String>): String? =
         validate(calls, specs, ToolAuthorizationContext(confirmedCallIds = confirmed))
 }
-
-interface VoiceEngine {
-    val name: String
-    val onDevice: Boolean
-    val available: Boolean
-}
-
-/** Android's platform recognizer is selected only when it advertises an on-device backend. */
-data class VoiceStatus(val engine: VoiceEngine, val transcript: String? = null, val reviewed: Boolean = false) {
-    fun canCreateGoal(): Boolean = engine.available && engine.onDevice && reviewed && !transcript.isNullOrBlank()
-}
