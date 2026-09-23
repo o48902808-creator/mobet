@@ -109,9 +109,15 @@ jobs:
           cat mobet-reproducibility.json
 
       - name: Generate SLSA build provenance
+        id: provenance
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: mobet.apk
+
+      - name: Stage offline Sigstore bundle
+        run: |
+          cp "${{ steps.provenance.outputs.bundle-path }}" mobet.sigstore.json
+          test -s mobet.sigstore.json
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -124,6 +130,7 @@ jobs:
             mobet-evidence.zip
             mobet-evidence.zip.sha256
             mobet-reproducibility.json
+            mobet.sigstore.json
           if-no-files-found: error
 
   publish:
@@ -167,7 +174,7 @@ jobs:
           EOF
 
           gh release create "$TAG" mobet.apk mobet.apk.sha256 mobet-capability.json \
-            mobet-evidence.zip mobet-evidence.zip.sha256 mobet-reproducibility.json \
+            mobet-evidence.zip mobet-evidence.zip.sha256 mobet-reproducibility.json mobet.sigstore.json \
             --repo "$REPO" \
             --target "$COMMIT" \
             --title "$TITLE" \

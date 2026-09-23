@@ -1,7 +1,8 @@
 # Offline SLSA and Sigstore verification
 
-Mobet's **Verify SLSA provenance** command accepts a Sigstore bundle selected through Android's
-document picker. Evidence is capped at 1 MiB while streaming and is never treated as a workflow.
+Mobet's **Verify SLSA provenance** command accepts the `mobet.sigstore.json` release asset selected
+through Android's document picker. Release CI copies the exact bundle emitted by
+`actions/attest-build-provenance` into every GitHub release. Evidence is capped at 1 MiB while streaming and is never treated as a workflow.
 The app has no network permission.
 
 Verification uses `sigstore-java` with the source-controlled

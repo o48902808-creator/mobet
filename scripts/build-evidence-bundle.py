@@ -18,6 +18,7 @@ def main() -> int:
     p.add_argument('--output', type=pathlib.Path, required=True)
     p.add_argument('--tests', type=pathlib.Path, action='append', default=[])
     p.add_argument('--ledger', type=pathlib.Path)
+    p.add_argument('--device', default='not-recorded', help='Non-sensitive device or emulator profile')
     args = p.parse_args()
     capability = json.loads(args.capability.read_text())
     apk_hash = digest(args.apk)
@@ -41,6 +42,7 @@ def main() -> int:
                   'attestation': capability.get('attestation')},
         'invariants': capability.get('invariants', []),
         'tests': reports,
+        'environment': {'deviceProfile': args.device},
         'ledger': ledger,
         'privacy': {'screenshotsIncluded': False, 'secretsIncluded': False},
     }

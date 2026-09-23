@@ -242,3 +242,26 @@ jobs:
                   print('::error title=Device failure::connectedDebugAndroidTest failed; no XML or error lines found.')
           raise SystemExit(1)
           PY
+
+      - name: Build device-lab evidence envelope
+        if: steps.device.outcome == 'success'
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          python3 scripts/build-evidence-bundle.py \
+            --apk "$APK" \
+            --capability app/src/main/assets/mobet-capability.json \
+            --tests app/build/outputs/androidTest-results \
+            --device "GitHub-hosted Android emulator API 29 x86_64" \
+            --output mobet-device-evidence.zip
+          sha256sum mobet-device-evidence.zip > mobet-device-evidence.zip.sha256
+
+      - name: Upload device-lab evidence
+        if: steps.device.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-lab-evidence-api29
+          path: |
+            mobet-device-evidence.zip
+            mobet-device-evidence.zip.sha256
+          if-no-files-found: error
