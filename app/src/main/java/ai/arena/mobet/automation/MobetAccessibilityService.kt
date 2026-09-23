@@ -246,6 +246,20 @@ class MobetAccessibilityService : AccessibilityService() {
     } catch (_: Exception) { null }
 
     /**
+     * Snapshot-bound read-only tools. Construction requires an audit sink, so every attempted
+     * dispatch—allowed or denied—produces a redacted hash-chained ledger event.
+     */
+    fun currentToolRegistry(): ai.arena.mobet.agent.ToolRegistry? = currentSnapshot()?.let { live ->
+        val observation = ai.arena.mobet.agent.AccessibilityObservationAdapter.adapt(
+            live,
+            appVersion(live.packageName)
+        )
+        ai.arena.mobet.agent.SafeTools.forObservation(observation) { record ->
+            check(ledger.append(record.ledgerEvent())) { "Tool audit ledger write failed" }
+        }
+    }
+
+    /**
      * Non-bypassable action gateway used by the live agent. Risk is recomputed from the translated
      * step; AgentAction.risk is never trusted. WorkflowRunner remains the sole device executor.
      */

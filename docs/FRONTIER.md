@@ -218,12 +218,13 @@ a fallback. A future bundled Whisper/Vosk backend is compatible with this contra
 model is shipped locally, its size and battery budget are accepted, and recognition output still
 requires review. Streaming audio must never be retained by default.
 
-The agent now has a typed `ToolCall`/`ToolRegistry` boundary. Model or voice intent can request
-only an allow-listed tool with bounded identifiers and arguments; unknown tools, malformed calls,
-and oversized payloads are rejected before dispatch. Tools return structured results and must
-still pass the existing deterministic policy before any device mutation. The initial tools are
-read-only screen description and action enumeration. This is the safe foundation for future
-calendar, file, or app-specific tools without turning natural language into arbitrary execution.
+The agent now has a typed `ToolCall`/`ToolRegistry` boundary. Every tool declares typed input and
+bounded output schemas, package scope, risk, exact-call confirmation requirements, and autonomous
+eligibility. Authorization is repeated at dispatch, so direct calls and package changes cannot
+bypass a prior plan check. Every allowed or denied call crosses a mandatory audit sink containing
+redacted arguments, risk, policy and confirmation outcomes, and a result digest. The registered
+runtime tools remain read-only screen description, action enumeration, and package inspection;
+mutating tools stay behind the workflow safety pipeline until intent-to-plan integration.
 
 ## Implementation status: frontier phases
 

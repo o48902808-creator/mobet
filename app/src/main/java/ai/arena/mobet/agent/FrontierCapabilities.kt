@@ -24,21 +24,49 @@ data class ToolSpec(
     val name: String,
     val description: String,
     val risk: ToolRisk,
-    val requiredPackage: String? = null,
-    val requiresConfirmation: Boolean = risk == ToolRisk.CONFIRM_REQUIRED
+    val inputSchema: ToolInputSchema = ToolInputSchema(),
+    val outputSchema: ToolOutputSchema = ToolOutputSchema("Bounded plain text result"),
+    val requiredPackageScope: Set<String> = emptySet(),
+    val requiresConfirmation: Boolean = risk == ToolRisk.CONFIRM_REQUIRED,
+    val allowedDuringAutonomousExecution: Boolean =
+        risk == ToolRisk.READ_ONLY || risk == ToolRisk.REVERSIBLE
 )
 
 /** A plan is executable only when every requested tool is known and its risk is acknowledged. */
 object ToolPlanGate {
-    fun validate(calls: List<ToolCall>, specs: List<ToolSpec>, confirmed: Set<String>): String? {
+    fun validate(
+        calls: List<ToolCall>,
+        specs: List<ToolSpec>,
+        context: ToolAuthorizationContext
+    ): String? {
+        if (calls.size > 50) return "Tool plan exceeds 50 calls"
+        if (calls.map(ToolCall::id).distinct().size != calls.size) return "Tool call ids must be unique"
         val byName = specs.associateBy { it.name }
         calls.forEach { call ->
+            if (!call.id.matches(Regex("[A-Za-z0-9_-]{1,64}"))) return "Invalid tool call id"
+            if (call.arguments.size > 12 || call.arguments.any { it.key.length > 48 || it.value.length > 512 }) {
+                return "Tool arguments exceed safety limits"
+            }
             val spec = byName[call.name] ?: return "Unknown tool: ${call.name}"
-            if (spec.risk == ToolRisk.NEVER_AUTOMATIC) return "Tool is never automatic: ${call.name}"
-            if (spec.requiresConfirmation && call.id !in confirmed) return "Confirmation required: ${call.name}"
+            if (spec.risk == ToolRisk.NEVER_AUTOMATIC) return "Tool is never model-authorized: ${call.name}"
+            if (context.autonomous && !spec.allowedDuringAutonomousExecution) {
+                return "Tool is not allowed during autonomous execution: ${call.name}"
+            }
+            if (spec.requiredPackageScope.isNotEmpty() && context.currentPackage !in spec.requiredPackageScope) {
+                return "Package scope blocked ${call.name}: ${context.currentPackage ?: "no active package"}"
+            }
+            if ((spec.requiresConfirmation || spec.risk == ToolRisk.CONFIRM_REQUIRED) &&
+                call.id !in context.confirmedCallIds
+            ) {
+                return "Confirmation required: ${call.name}"
+            }
+            spec.inputSchema.validate(call.arguments)?.let { return "Invalid ${call.name} input: $it" }
         }
         return null
     }
+
+    fun validate(calls: List<ToolCall>, specs: List<ToolSpec>, confirmed: Set<String>): String? =
+        validate(calls, specs, ToolAuthorizationContext(confirmedCallIds = confirmed))
 }
 
 interface VoiceEngine {
