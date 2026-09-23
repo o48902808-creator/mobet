@@ -50,7 +50,9 @@ class AuditLedger(context: Context) {
         // a write that failed would leave the mark ahead of the chain forever, and verify()
         // would report tampering on every launch for what was really a full disk. Under-
         // recording is the safe direction: it can only miss a truncation, never invent one.
-        if (save(trimmed)) recordHighWater(sequence)
+        val saved = save(trimmed)
+        if (saved) recordHighWater(sequence)
+        return saved
     }
 
     @Synchronized

@@ -49,6 +49,21 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      # Generate the payload before compilation so the app can verify and display it offline.
+      # The workflow still adds the final whole-APK digest to the external sidecar after build:
+      # embedding that value in the APK itself would change the digest recursively.
+      - name: Generate embedded capability manifest
+        env:
+          ATTESTATION_REF: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifact-attestation
+        run: |
+          VERSION_NAME="$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)"
+          VERSION_CODE="$(sed -n 's/.*versionCode = \([0-9]*\).*/\1/p' app/build.gradle.kts | head -1)"
+          python3 scripts/generate-capability-manifest.py \
+            --output app/src/main/assets/mobet-capability.json \
+            --version-name "$VERSION_NAME" --version-code "$VERSION_CODE" \
+            --commit "$GITHUB_SHA" --workflow "$GITHUB_WORKFLOW_REF" \
+            --attestation "$ATTESTATION_REF" --build-type debug --signing debug
+
       # The repository intentionally omits the Gradle wrapper JAR; CI pins Gradle itself.
       - name: Run deterministic unit tests
         run: gradle --no-daemon --warning-mode all test assembleDebug
@@ -58,14 +73,16 @@ jobs:
           mv app/build/outputs/apk/debug/app-debug.apk mobet.apk
           test -s mobet.apk
           sha256sum mobet.apk | tee mobet.apk.sha256
+          cp app/src/main/assets/mobet-capability.json mobet-capability.json
           python3 - <<'PYTHON'
-          import hashlib, json, os
+          import hashlib, json
+          path = "mobet-capability.json"
+          manifest = json.load(open(path))
           digest = hashlib.sha256(open("mobet.apk", "rb").read()).hexdigest()
-          json.dump({"schema":"mobet.capability.v1", "artifact":"mobet.apk", "sha256":digest,
-                     "commit":os.environ["GITHUB_SHA"], "workflow":os.environ["GITHUB_WORKFLOW_REF"],
-                     "invariants":["no-network-permission","deterministic-policy-authority",
-                                    "hash-chained-ledger","model-output-is-untrusted"]},
-                    open("mobet-capability.json", "w"), indent=2)
+          manifest["artifact"] = "mobet.apk"
+          manifest["sha256"] = digest
+          json.dump(manifest, open(path, "w"), indent=2)
+          open(path, "a").write("\n")
           PYTHON
 
       - name: Generate SLSA build provenance
@@ -123,7 +140,7 @@ jobs:
           - Build log: ${RUN_URL}
           EOF
 
-          gh release create "$TAG" mobet.apk \
+          gh release create "$TAG" mobet.apk mobet.apk.sha256 mobet-capability.json \
             --repo "$REPO" \
             --target "$COMMIT" \
             --title "$TITLE" \

@@ -5,7 +5,10 @@ import ai.arena.mobet.automation.PresenceLauncher
 import ai.arena.mobet.automation.RunReminder
 import ai.arena.mobet.automation.Workflow
 import ai.arena.mobet.automation.WorkflowTransfer
+import ai.arena.mobet.audit.AuditLedger
 import ai.arena.mobet.policy.PlanValidator
+import ai.arena.mobet.provenance.BuildIntegrity
+import ai.arena.mobet.provenance.BuildIntegrityReport
 import ai.arena.mobet.security.SecretStore
 import ai.arena.mobet.ui.JsonErrorLocator
 import ai.arena.mobet.ui.JsonHighlighter
@@ -33,6 +36,7 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -43,6 +47,9 @@ import com.google.android.material.card.MaterialCardView
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.progressindicator.CircularProgressIndicator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -143,6 +150,7 @@ class MainActivity : AppCompatActivity() {
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
         handleServiceIntent(intent)
+        verifyAndRecordBuildOnFirstLaunch()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -216,6 +224,7 @@ class MainActivity : AppCompatActivity() {
                 R.id.menu_export -> { exportLibrary(); true }
                 R.id.menu_import -> { importLibrary(); true }
                 R.id.menu_reminders -> { showReminders(); true }
+                R.id.menu_build_integrity -> { showBuildIntegrity(); true }
                 else -> false
             }
         }
@@ -682,7 +691,88 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── Diagnostics, ledger, memory ──────────────────────────────────────────
+    // ── Build provenance, diagnostics, ledger, memory ───────────────────────
+
+    /**
+     * Verifies immutable build metadata and records one result per embedded manifest digest.
+     * APK hashing runs off the main thread because release artifacts can be tens of megabytes.
+     */
+    private fun verifyAndRecordBuildOnFirstLaunch() {
+        lifecycleScope.launch {
+            val report = withContext(Dispatchers.IO) {
+                runCatching { BuildIntegrity.inspect(applicationContext) }.getOrNull()
+            } ?: return@launch
+            val manifest = report.manifest ?: return@launch
+            val marker = manifest.manifestSha256
+            val preferences = getSharedPreferences("build_integrity", MODE_PRIVATE)
+            if (preferences.getString("recorded_manifest", null) == marker) return@launch
+
+            val event = if (report.verified) {
+                "Build verified: v${manifest.versionName} · SHA-256 ${report.shortApkDigest}… · " +
+                    "zero-network invariant"
+            } else {
+                "Build verification failed: v${manifest.versionName} · ${report.failures.joinToString("; ")}"
+            }
+            val stored = withContext(Dispatchers.IO) { AuditLedger(applicationContext).append(event) }
+            if (stored) preferences.edit().putString("recorded_manifest", marker).apply()
+        }
+    }
+
+    private fun showBuildIntegrity() {
+        showBusy(true)
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { BuildIntegrity.inspect(applicationContext) }
+            }
+            showBusy(false)
+            if (isFinishing || isDestroyed) return@launch
+            result.onSuccess(::renderBuildIntegrity).onFailure {
+                showStatus("Build verification failed: ${it.message}", Tone.DANGER)
+            }
+        }
+    }
+
+    private fun renderBuildIntegrity(report: BuildIntegrityReport) {
+        val manifest = report.manifest
+        val sheet = MobetUi.ReportSheet(this)
+            .title("Build integrity", R.drawable.ic_check)
+            .subtitle("Offline package and provenance verification")
+
+        if (report.verified) {
+            sheet.banner("✔ Build manifest and installed package are consistent", Tone.SUCCESS)
+        } else {
+            sheet.banner("✖ Integrity verification failed", Tone.DANGER)
+            sheet.paragraph(report.failures.joinToString("\n") { "• $it" })
+        }
+
+        if (manifest != null) {
+            val commit = manifest.commit.let { if (it.length > 12) it.take(12) else it }
+            sheet.rows(
+                listOf(
+                    Row("App version", "${manifest.versionName} (${manifest.versionCode}) · ${manifest.buildType}", R.drawable.ic_info, showChevron = false),
+                    Row("Build provenance", if (report.verified) "Verified offline · commit $commit" else "Consistency failure · commit $commit", R.drawable.ic_check, showChevron = false),
+                    Row("Signing", "${report.actualSigning} signing · manifest expects ${manifest.expectedSigning}", R.drawable.ic_policy, showChevron = false),
+                    Row("Model engine", report.modelStatus, R.drawable.ic_agent, showChevron = false),
+                    Row("Voice engine", report.voiceStatus, R.drawable.ic_record, showChevron = false),
+                    Row("Policy version", manifest.policyVersion, R.drawable.ic_policy, showChevron = false),
+                    Row("Ledger schema", manifest.ledgerSchemaVersion, R.drawable.ic_ledger, showChevron = false),
+                    Row("Workflow", manifest.workflow, R.drawable.ic_diagnostics, showChevron = false),
+                    Row("Attestation reference", manifest.attestation, R.drawable.ic_check, showChevron = false)
+                )
+            )
+        }
+        sheet.paragraph(
+            "Installed APK SHA-256 (computed locally from the package bytes):"
+        ).monospace(report.apkSha256.ifBlank { "unavailable" })
+            .paragraph(
+                "The embedded manifest authenticates its canonical payload and is checked against " +
+                    "the installed app ID, version, signing certificate, declared permissions, and " +
+                    "required safety invariants. The APK computes its own final digest because a " +
+                    "file cannot embed its final whole-file hash without changing that hash."
+            )
+            .action(getString(R.string.action_close))
+            .show()
+    }
 
     private fun showDiagnostics() {
         val service = MobetAccessibilityService.instance

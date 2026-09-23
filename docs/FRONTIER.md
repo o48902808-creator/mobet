@@ -186,18 +186,19 @@ one side without taxing the other.
 
 ## Pillar 5 — Verifiable supply chain and capability proofs
 
-> **Status: provenance is now emitted by the release pipeline.** Every release build creates a
-> GitHub Artifact Attestation for the exact `mobet.apk` subject before the publish job receives
-> it. The build job has no release-write token; the publish job only checks the recorded digest
-> and publishes the already-built bytes. This makes the release a verifiable statement about
-> source, workflow, builder identity, and artifact—not merely a file attached to a tag.
+> **Status: provenance is emitted and consumed end to end.** Every release build embeds a
+> canonical, self-verifying capability manifest and creates a GitHub Artifact Attestation for the
+> exact `mobet.apk` subject before the publish job receives it. The Build integrity screen checks
+> the manifest against installed package metadata, signing, permissions, and required invariants,
+> computes the installed APK SHA-256 offline, and records the result on first launch. The build job
+> has no release-write token; the publish job only checks and publishes the already-built bytes.
 
-The next frontier is a **capability proof, not a capability claim**. A release should carry a
-machine-readable manifest containing the APK digest, commit, test suite result, merged-manifest
-permission posture, validator version, ledger format version, and attestation reference. The
-app can display this immutable build card offline, while the audit ledger records the digest and
-verification outcome at first launch. No server, telemetry, or trust in a mutable web page is
-needed.
+Each release now carries a **capability proof, not only a capability claim**. The embedded
+machine-readable manifest contains the version, commit, workflow, policy and ledger versions,
+engine declarations, permission invariants, expected signing, and attestation reference. Its
+canonical payload digest is verified offline. Mobet separately hashes the installed APK bytes;
+the external release sidecar carries that final artifact digest because embedding a file's own
+whole-file hash would be self-referential. No server, telemetry, or mutable web page is needed.
 
 The invariant is deliberately asymmetric: model output can improve planning, but only signed
 release provenance and deterministic local policy can establish what shipped and what may run.
