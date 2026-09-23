@@ -73,4 +73,8 @@
     <string name="action_clear">Clear</string>
     <string name="action_delete">Delete</string>
     <string name="action_copy_selector">Copy selector</string>
+    <string name="tile_label">Mobet: run pinned</string>
+    <string name="tile_unpinned">No pinned workflow</string>
+    <string name="shortcut_run_pinned">Run pinned workflow</string>
+    <string name="shortcut_run_pinned_long">Mobet · run pinned workflow</string>
 </resources>

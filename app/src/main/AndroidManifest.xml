@@ -44,6 +44,22 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Share-target intake: open a .mobet.json bundle (or any JSON doc) from a file
+                 manager or another app. Content is untrusted and re-enters through the same
+                 streamed, capped, validator-gated import path as the in-app picker; nothing
+                 runs without explicit review (docs/THREAT_MODEL.md). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/json" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <!-- Posts a reminder notification at a chosen time. It never starts a workflow:
@@ -80,6 +96,20 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- QS tile: triggers the pinned workflow from the shade (docs/FRONTIER.md pillar 4).
+             A click only opens the app on the pinned run — confirmation gates still apply.
+             BIND_QUICK_SETTINGS_TILE is a signature permission the system itself enforces. -->
+        <service
+            android:name=".automation.MobetTileService"
+            android:exported="true"
+            android:label="@string/tile_label"
+            android:icon="@drawable/ic_run"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <service
             android:name=".automation.MobetAccessibilityService"

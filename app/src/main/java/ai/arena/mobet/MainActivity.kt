@@ -1,6 +1,7 @@
 package ai.arena.mobet
 
 import ai.arena.mobet.automation.MobetAccessibilityService
+import ai.arena.mobet.automation.PresenceLauncher
 import ai.arena.mobet.automation.RunReminder
 import ai.arena.mobet.automation.Workflow
 import ai.arena.mobet.automation.WorkflowTransfer
@@ -792,8 +793,47 @@ class MainActivity : AppCompatActivity() {
             showStatus("Autonomous run stopped from notification", Tone.WARNING)
             return
         }
+        handlePresenceRun(value)
+        handleViewImport(value)
         openWorkflowFromReminder(value)
         handleConfirmation(value)
+    }
+
+    /**
+     * QS tile / launcher shortcut (docs/FRONTIER.md pillar 4): the click is the user's
+     * explicit gesture, so the pinned workflow is loaded and run immediately — the ordinary
+     * pipeline still applies, including every confirmation gate. Without a pin the gesture
+     * opens the library so the user can pin what the tile should fire.
+     */
+    private fun handlePresenceRun(value: Intent?) {
+        if (value?.action != PresenceLauncher.ACTION_RUN_PINNED) return
+        intent.action = null
+        val pinned = PresenceLauncher.resolve(this)
+        if (pinned == null) {
+            showStatus(
+                "Nothing is pinned to the shade yet — run a workflow, or pin one from its library sheet",
+                Tone.WARNING
+            )
+            loadFromLibrary()
+            return
+        }
+        editor.setText(pinned.source)
+        persistDraft()
+        showStatus("Running pinned workflow “${pinned.name}”", Tone.SUCCESS)
+        runWorkflow()
+    }
+
+    /**
+     * Share-target intake: a `.mobet.json` bundle (or any JSON document) opened into Mobet
+     * from a file manager or another app. The review sheet is the same one the in-app picker
+     * uses — stream-capped read, per-entry validation, explicit Import — so this surface adds
+     * no new trust decisions, only a new route to the existing ones (docs/THREAT_MODEL.md).
+     */
+    private fun handleViewImport(value: Intent?) {
+        if (value?.action != Intent.ACTION_VIEW) return
+        val uri = value.data ?: return
+        intent.action = null
+        previewImport(uri)
     }
 
     private fun handleConfirmation(value: Intent?) {
@@ -1343,6 +1383,11 @@ class MainActivity : AppCompatActivity() {
                     showStatus("Loaded “$name”", Tone.SUCCESS)
                 }
                 .action("Remind me") { scheduleReminder(name) }
+                .action("Pin to shade") {
+                    val source = library.getString(name, null) ?: return@action
+                    PresenceLauncher.pin(this@MainActivity, name, source)
+                    showStatus("Pinned “$name” — the QS tile and launcher shortcut now run it", Tone.SUCCESS)
+                }
                 .action(getString(R.string.action_delete), destructive = true) {
                     confirmDestructive(
                         "Delete “$name”?",
@@ -1517,6 +1562,9 @@ class MainActivity : AppCompatActivity() {
             val source = editor.text.toString()
             val workflow = Workflow.parse(source)
             persistDraft()
+            // The run is the strongest signal of what the QS tile/shortcut should fire:
+            // every successful start re-pins it (docs/FRONTIER.md pillar 4).
+            PresenceLauncher.pin(this, workflow.name, source)
             showBusy(true)
             service.run(workflow)
         } catch (error: Exception) {

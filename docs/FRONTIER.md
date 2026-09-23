@@ -113,6 +113,14 @@ dry-run (`PlanSimulator`) renders each path.
 
 ## Pillar 4 — Presence without a network
 
+> **Status: first two shipped on this branch (0.9 in flight).** The quick-settings tile and a
+> static launcher shortcut both run the *pinned* workflow — pinned explicitly from any library
+> sheet ("Pin to shade") or implicitly by the last successful run — through the unchanged run
+> pipeline, confirmations included, and the pin carries a source snapshot so it survives
+> library deletion while still tracking edits. Share-target import accepts `.mobet.json`
+> bundles (and any JSON document) via `VIEW` into the exact streamed/capped/previewed import
+> path the in-app picker uses; QR handoff stays the exploratory 1.0 item.
+
 Quick wins that make the agent feel native while keeping the manifest clean:
 
 - **Quick-settings tile + app shortcuts** — trigger a pinned workflow from the

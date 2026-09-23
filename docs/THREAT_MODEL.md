@@ -120,6 +120,25 @@ build. Screen text sent to the on-device model stays on the device, and requirem
 future networked feature (screen text never transmitted) remains the bar this design does not
 spend: the model is *borrowed from the OS*, the bytes never leave the phone.
 
+## Local presence surfaces (tile, shortcut, share-intake)
+
+Pillar 4 adds three local entry points, each held to the intake rules this document already sets.
+
+**Share-target import (`VIEW`).** Any `.mobet.json` (or any JSON document) opened into Mobet
+now lands in the same pipeline as the in-app file picker: the stream is capped *while read*,
+every entry passes `Workflow.parse` before it is even listed, the preview sheet names invalid
+entries rather than hiding them, and commit renames rather than overwrites. Nothing imported
+runs without the user loading it and pressing Run, so this surface adds a route to existing
+decisions, not a new privilege. A hostile bundle's worst case is clutter the user must still
+explicitly approve — and even approved clutter cannot act: `PlanValidator`, risk tiers, and
+confirmations govern every run.
+
+**Quick-settings tile and launcher shortcut.** Both trigger the *pinned* workflow and nothing
+else; the tile is bound by a signature-level permission, and the deep-trigger is a click —
+an explicit user initiation, same trust class as pressing Run (unlike reminders, which never
+run anything). The pin itself is private app data; no other app can read it or fire the
+action with effect, because the exported activity's other filters grant data, not execution.
+
 ## Non-goals and residual risks
 
 - Rooted or fully compromised devices can subvert app and platform guarantees.
