@@ -133,7 +133,24 @@ jobs:
           exit 1
 
       - name: Assemble debug APK
-        run: gradle --no-daemon --warning-mode all assembleDebug
+        id: assemble
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          gradle --no-daemon --warning-mode all assembleDebug --stacktrace 2>&1 | tee /tmp/assemble.log
+
+      - name: Report APK assembly errors
+        if: steps.assemble.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          log = open('/tmp/assemble.log', errors='replace').read()
+          markers = ('* What went wrong:', 'Execution failed for task', 'Caused by:', 'More than one file', 'Duplicate class')
+          lines = [line.strip() for line in log.splitlines() if any(m in line for m in markers)]
+          for line in lines[-30:]:
+              safe = line[:900].replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+              print(f'::error title=APK assembly::{safe}')
+          PY
+          exit 1
 
       - name: Upload test reports
         if: always()
