@@ -16,7 +16,7 @@ declined — *declined, not deferred* ([STATE_OF_THOUGHT.md](STATE_OF_THOUGHT.md
 
 ## Pillar 1 — On-device intelligence behind the existing contract
 
-> **Status: core shipped on this branch (0.9 in flight).** `AiCoreModelAssistant` implements
+> **Status: core shipped on this branch.** `AiCoreModelAssistant` implements
 > the contract over the ML Kit GenAI Prompt API (Gemini Nano via AICore): created only for
 > model-assisted runs, created successfully only when `checkStatus()` reports the feature
 > available on this device, process-singleton, hard-capped per inference, falling back to the
@@ -116,7 +116,7 @@ dry-run (`PlanSimulator`) renders each path.
 
 ## Pillar 4 — Presence without a network
 
-> **Status: first two shipped on this branch (0.9 in flight).** The quick-settings tile and a
+> **Status: first two shipped on this branch.** The quick-settings tile and a
 > static launcher shortcut both run the *pinned* workflow — pinned explicitly from any library
 > sheet ("Pin to shade") or implicitly by the last successful run — through the unchanged run
 > pipeline, confirmations included, and the pin carries a source snapshot so it survives
