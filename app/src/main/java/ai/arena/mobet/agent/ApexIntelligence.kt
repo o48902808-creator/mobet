@@ -121,8 +121,23 @@ object HierarchicalPlanner {
 }
 
 enum class FailureKind { STALE_SELECTOR, LOADING_DELAY, MODAL_INTERRUPTION, WRONG_APP, PERMISSION_GATE, DEAD_END, DEVICE_REJECTED }
-data class RecoveryPolicy(val kind: FailureKind, val maxAttempts: Int, val action: RecoveryAction)
-enum class RecoveryAction { WAIT, REPAIR_SELECTOR, DISMISS_MODAL, RETURN_TO_APP, ASK_USER, BACKTRACK, ABSTAIN }
+data class RecoveryPolicy(
+    val kind: FailureKind,
+    val maxAttempts: Int,
+    val strategy: RecoveryStrategy
+) {
+    /** Compatibility projection for existing diagnostics and callers. */
+    val action: RecoveryAction get() = when (strategy) {
+        RecoveryStrategy.WAIT_FOR_SETTLE -> RecoveryAction.WAIT
+        RecoveryStrategy.REPAIR_SELECTOR -> RecoveryAction.REPAIR_SELECTOR
+        RecoveryStrategy.DISMISS_MODAL -> RecoveryAction.DISMISS_MODAL
+        RecoveryStrategy.BACKTRACK -> if (kind == FailureKind.WRONG_APP) RecoveryAction.RETURN_TO_APP else RecoveryAction.BACKTRACK
+        RecoveryStrategy.REPLAN -> RecoveryAction.REPLAN
+        RecoveryStrategy.ASK_USER -> RecoveryAction.ASK_USER
+        RecoveryStrategy.ABSTAIN -> RecoveryAction.ABSTAIN
+    }
+}
+enum class RecoveryAction { WAIT, REPAIR_SELECTOR, DISMISS_MODAL, RETURN_TO_APP, ASK_USER, BACKTRACK, REPLAN, ABSTAIN }
 
 object FailureClassifier {
     fun classify(before: AgentObservation, after: AgentObservation?, detail: String, elapsedMs: Long): FailureKind = when {
@@ -138,13 +153,13 @@ object FailureClassifier {
 
 object RecoveryPolicies {
     fun forFailure(kind: FailureKind): RecoveryPolicy = when (kind) {
-        FailureKind.LOADING_DELAY -> RecoveryPolicy(kind, 2, RecoveryAction.WAIT)
-        FailureKind.STALE_SELECTOR -> RecoveryPolicy(kind, 1, RecoveryAction.REPAIR_SELECTOR)
-        FailureKind.MODAL_INTERRUPTION -> RecoveryPolicy(kind, 1, RecoveryAction.DISMISS_MODAL)
-        FailureKind.WRONG_APP -> RecoveryPolicy(kind, 1, RecoveryAction.RETURN_TO_APP)
-        FailureKind.PERMISSION_GATE -> RecoveryPolicy(kind, 0, RecoveryAction.ASK_USER)
-        FailureKind.DEAD_END -> RecoveryPolicy(kind, 1, RecoveryAction.BACKTRACK)
-        FailureKind.DEVICE_REJECTED -> RecoveryPolicy(kind, 0, RecoveryAction.ABSTAIN)
+        FailureKind.LOADING_DELAY -> RecoveryPolicy(kind, 2, RecoveryStrategy.WAIT_FOR_SETTLE)
+        FailureKind.STALE_SELECTOR -> RecoveryPolicy(kind, 1, RecoveryStrategy.REPAIR_SELECTOR)
+        FailureKind.MODAL_INTERRUPTION -> RecoveryPolicy(kind, 1, RecoveryStrategy.DISMISS_MODAL)
+        FailureKind.WRONG_APP -> RecoveryPolicy(kind, 1, RecoveryStrategy.BACKTRACK)
+        FailureKind.PERMISSION_GATE -> RecoveryPolicy(kind, 0, RecoveryStrategy.ASK_USER)
+        FailureKind.DEAD_END -> RecoveryPolicy(kind, 1, RecoveryStrategy.BACKTRACK)
+        FailureKind.DEVICE_REJECTED -> RecoveryPolicy(kind, 0, RecoveryStrategy.ABSTAIN)
     }
 }
 

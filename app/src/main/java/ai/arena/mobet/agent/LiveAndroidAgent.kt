@@ -92,6 +92,7 @@ class LiveAndroidAgent(
     private var lastBelief: BeliefState = BeliefState(emptyList(), 1.0)
     private val frames = ArrayDeque<Pair<String, String>>()
     private val recoveryAttempts = mutableMapOf<FailureKind, Int>()
+    private val actionSnapshots = ArrayDeque<ActionSnapshot>()
 
     private fun timeline(
         state: ExecutionTimelineEvent.State,
@@ -138,7 +139,7 @@ class LiveAndroidAgent(
         deliberator = Deliberator(memory, assistant)
         cycles = 0; completionEvidenceHits = 0; ocrCheckInFlight = false; startedAt = android.os.SystemClock.uptimeMillis()
         runGeneration++; beliefTracker.clear(); lastBelief = BeliefState(emptyList(), 1.0)
-        stabilizer.reset(); frames.clear(); recoveryAttempts.clear(); cancelled = false
+        stabilizer.reset(); frames.clear(); recoveryAttempts.clear(); actionSnapshots.clear(); cancelled = false
         checkpoints.start(value)
         service.showAutonomyNotification()
         val modelEngine = when {
@@ -293,11 +294,34 @@ class LiveAndroidAgent(
                 val after = snapshot?.let { AccessibilityObservationAdapter.adapt(it, service.appVersion(it.packageName)) }
                 val progressed = accepted && after != null &&
                     (after.screenId != before.screenId || after.facts != before.facts)
+                val assessment = AccessibilityObservationAdapter.toStep(action)?.let(RiskEngine::assess)
+                val destructive = !action.reversible || (assessment?.score ?: action.risk) >= 70
+                val recoveryCost = recoveryAttempts.values.sum()
+                actionSnapshots.addLast(
+                    ActionSnapshot(
+                        cycle = cycles,
+                        actionId = action.id,
+                        screenBefore = before.screenId,
+                        screenAfter = after?.screenId,
+                        reversible = action.reversible,
+                        destructive = destructive,
+                        reversalAction = if (action.reversible) "back" else null,
+                        reversalSucceeded = if (backtrack) progressed else null,
+                        recoveryCost = recoveryCost,
+                        retries = recoveryCost
+                    )
+                )
+                while (actionSnapshots.size > 50) actionSnapshots.removeFirst()
+                emit(
+                    "Action snapshot cycle $cycles · before ${before.screenId} · after ${after?.screenId ?: "unobserved"} · " +
+                        "reversal ${if (action.reversible) "back" else "none"} · " +
+                        "reversal result ${if (backtrack) progressed else "not attempted"} · recovery cost $recoveryCost"
+                )
                 if (!progressed) {
                     val kind = FailureClassifier.classify(before, after, detail, 500)
                     memory.record(TransitionExperience(before.screenId, action.id, after?.screenId ?: before.screenId,
                         false, before.packageName, before.appVersion, confidence = confidence, failure = kind))
-                    if (recover(kind, before)) return@postDelayed
+                    if (recover(kind, before, action)) return@postDelayed
                     memory.markDeadEnd(before.screenId, action.id)
                 } else if (after != null) {
                     recoveryAttempts.clear()
@@ -317,36 +341,55 @@ class LiveAndroidAgent(
     }
 
     /** Returns true when recovery scheduled or terminated the run. */
-    private fun recover(kind: FailureKind, before: AgentObservation): Boolean {
+    private fun recover(kind: FailureKind, before: AgentObservation, failedAction: AgentAction): Boolean {
         val policy = RecoveryPolicies.forFailure(kind)
         val attempts = recoveryAttempts[kind] ?: 0
-        if (attempts >= policy.maxAttempts) {
-            if (policy.action == RecoveryAction.ASK_USER || policy.action == RecoveryAction.ABSTAIN) {
-                finish(AgentStatus.ABSTAINED, "$kind requires user intervention")
-                return true
-            }
-            return false
+        val assessment = AccessibilityObservationAdapter.toStep(failedAction)?.let(RiskEngine::assess)
+        val destructive = !failedAction.reversible || (assessment?.score ?: failedAction.risk) >= 70
+        val strategy = RecoveryPlanner.select(
+            RecoveryContext(
+                failure = kind,
+                reversible = failedAction.reversible,
+                destructive = destructive,
+                retries = attempts,
+                selectorRepairAvailable = false,
+                modalPresent = kind == FailureKind.MODAL_INTERRUPTION,
+                canReplan = kind != FailureKind.DEVICE_REJECTED
+            )
+        )
+        if (attempts >= policy.maxAttempts || destructive) {
+            val terminal = if (destructive) RecoveryStrategy.ASK_USER else strategy
+            finish(
+                AgentStatus.ABSTAINED,
+                if (terminal == RecoveryStrategy.ASK_USER) "$kind requires user intervention"
+                else "$kind recovery budget exhausted"
+            )
+            return true
         }
         recoveryAttempts[kind] = attempts + 1
-        val recovery = "${policy.action.name.lowercase()} ${attempts + 1}/${policy.maxAttempts} for ${kind.name.lowercase()}"
+        val recovery = "${strategy.name.lowercase()} ${attempts + 1}/${policy.maxAttempts} for ${kind.name.lowercase()}"
         timeline(
             ExecutionTimelineEvent.State.RECOVERING,
             before,
             recovery = recovery,
             evidence = "No verified progress after action"
         )
-        emit("Apex recovery $recovery")
-        when (policy.action) {
-            RecoveryAction.WAIT -> handler.postDelayed(::tick, 1_200)
-            RecoveryAction.RETURN_TO_APP -> {
-                service.launchTarget(goal?.allowedPackage ?: return false)
-                handler.postDelayed(::tick, 800)
-            }
-            RecoveryAction.DISMISS_MODAL -> execute(before,
-                AgentAction("back", "Back", kind = AgentActionKind.BACK), backtrack = true)
-            RecoveryAction.ASK_USER, RecoveryAction.ABSTAIN ->
+        emit("Apex recovery $recovery · cost ${RecoveryPlanner.cost(strategy)}")
+        when (strategy) {
+            RecoveryStrategy.WAIT_FOR_SETTLE -> handler.postDelayed(::tick, 1_200)
+            RecoveryStrategy.REPAIR_SELECTOR,
+            RecoveryStrategy.REPLAN -> handler.postDelayed(::tick, 300)
+            RecoveryStrategy.DISMISS_MODAL,
+            RecoveryStrategy.BACKTRACK -> execute(
+                before,
+                AgentAction("back", "Back", kind = AgentActionKind.BACK),
+                backtrack = true,
+                evidence = "Recovery ${strategy.name.lowercase()}"
+            )
+            RecoveryStrategy.ASK_USER ->
                 finish(AgentStatus.ABSTAINED, "$kind requires user intervention")
-            RecoveryAction.REPAIR_SELECTOR, RecoveryAction.BACKTRACK -> return false
+            RecoveryStrategy.ABSTAIN ->
+                finish(AgentStatus.ABSTAINED, "$kind is not safe to retry")
         }
         return true
     }
