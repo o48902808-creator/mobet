@@ -1,6 +1,7 @@
 package ai.arena.mobet.agent
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -164,5 +165,82 @@ class StateOfThoughtPolicyTest {
         )
         val belief = BeliefReasoner.infer(evidence, mapOf(EvidenceSource.OCR to 0.1))
         assertEquals("text:working", belief.confidentFact(0.75))
+    }
+
+    // ── Regime builder (deterministic loop signals → ReasoningRegime) ──────────
+
+    @Test
+    fun `fresh trajectory builds the healthy regime`() {
+        val regime = StateOfThoughtPolicy.regime(
+            grounded = true, recentScreens = listOf("s1"), totalRecoveryAttempts = 0, uncertainty = 0.0
+        )
+        assertEquals(ReasoningRegime.HEALTHY, regime)
+        assertEquals(EvidencePolicy.DEFAULT, policy(regime))
+    }
+
+    @Test
+    fun `a trailing stall decays movement but never stability by itself`() {
+        // Three identical observations: run length 3, stalls 2 → movement 1/(1+0.5·2) = 0.5.
+        val regime = StateOfThoughtPolicy.regime(
+            grounded = true, recentScreens = listOf("s1", "s1", "s1"),
+            totalRecoveryAttempts = 0, uncertainty = 0.0
+        )
+        assertEquals(0.5, regime.movement, 1e-9)
+        assertEquals(1.0 / 3.0, regime.directionalStability, 1e-9)
+    }
+
+    @Test
+    fun `recovery attempts damp movement as accumulated evidence of struggle`() {
+        // Single screen, no stall: movement 1/(1+0.25·4) = 0.5 purely from recoveries.
+        val regime = StateOfThoughtPolicy.regime(
+            grounded = true, recentScreens = listOf("s1"),
+            totalRecoveryAttempts = 4, uncertainty = 0.0
+        )
+        assertEquals(0.5, regime.movement, 1e-9)
+        assertEquals(1.0, regime.directionalStability, 1e-9)
+    }
+
+    @Test
+    fun `oscillation collapses directional stability while the path keeps moving`() {
+        val regime = StateOfThoughtPolicy.regime(
+            grounded = true, recentScreens = listOf("a", "b", "a", "b"),
+            totalRecoveryAttempts = 0, uncertainty = 0.0
+        )
+        assertEquals(0.5, regime.directionalStability, 1e-9)
+        // The newest screen differs from its predecessor, so no trailing stall exists.
+        assertEquals(1.0, regime.movement, 1e-9)
+    }
+
+    @Test
+    fun `empty window reports no degradation yet`() {
+        val regime = StateOfThoughtPolicy.regime(
+            grounded = true, recentScreens = emptyList(), totalRecoveryAttempts = 0, uncertainty = 0.0
+        )
+        assertEquals(0.0, regime.degradation, 1e-9)
+    }
+
+    @Test
+    fun `builder output always stays in range even for extreme inputs`() {
+        val regime = StateOfThoughtPolicy.regime(
+            grounded = false,
+            recentScreens = List(64) { "same" },
+            totalRecoveryAttempts = 400,
+            uncertainty = 42.0
+        )
+        assertTrue(regime.movement in 0.0..1.0)
+        assertTrue(regime.directionalStability in 0.0..1.0)
+        assertTrue(regime.uncertainty in 0.0..1.0)
+        assertFalse(regime.grounded)
+    }
+
+    @Test
+    fun `a built regime lifts the OCR corroboration bar exactly when degraded`() {
+        val stuck = StateOfThoughtPolicy.regime(
+            grounded = true, recentScreens = listOf("s", "s", "s", "s"),
+            totalRecoveryAttempts = 6, uncertainty = 0.5
+        )
+        assertTrue(policy(stuck).weightOf(EvidenceSource.OCR) < EvidencePolicy.DEFAULT.weightOf(EvidenceSource.OCR))
+        // …while the accessibility channel keeps full trust, degraded or not.
+        assertEquals(1.0, policy(stuck).weightOf(EvidenceSource.ACCESSIBILITY), 1e-9)
     }
 }

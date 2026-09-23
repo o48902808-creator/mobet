@@ -253,7 +253,20 @@ class WorkflowRunner(
                 } else {
                     var chosen: AccessibilityNodeInfo? = null
                     var chosenIndex = -1
+                    var deadEndsSkipped = 0
                     for (i in step.options.indices) {
+                        // Dead-end routing: options recorded as dead on this screen (within
+                        // their TTL) are skipped without probing — the memory half of
+                        // self-healing applied to alternates. Every skip is logged, so a
+                        // routing decision is auditable rather than silently narrowing the
+                        // fallback list.
+                        if (lastFingerprint != null &&
+                            agentMemory.isDeadEnd(lastFingerprint!!, serialize(step.options[i]))
+                        ) {
+                            deadEndsSkipped++
+                            log("tryAlternates: option ${i + 1} skipped (recorded dead end)")
+                            continue
+                        }
                         val candidate = find(root, step.options[i])
                         if (candidate != null) {
                             chosen = candidate
@@ -264,7 +277,8 @@ class WorkflowRunner(
                     if (chosen == null) {
                         root.recycle()
                         val tried = step.options.joinToString(", ") { serialize(it) }
-                        finish("tryAlternates: none of ${step.options.size} options matched ($tried)")
+                        val deadNote = if (deadEndsSkipped > 0) " ($deadEndsSkipped skipped as recorded dead ends)" else ""
+                        finish("tryAlternates: none of ${step.options.size} options matched$deadNote ($tried)")
                     } else {
                         log("tryAlternates: option ${chosenIndex + 1}/${step.options.size} matched")
                         val ok = try {

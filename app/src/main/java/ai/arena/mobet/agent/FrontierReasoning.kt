@@ -132,7 +132,17 @@ class TemporalBeliefTracker(
     private data class Timed(val evidence: ObservationEvidence, val at: Long)
     private val history = ArrayDeque<Timed>()
 
-    fun update(evidence: List<ObservationEvidence>, now: Long = System.currentTimeMillis()): BeliefState {
+    fun update(
+        evidence: List<ObservationEvidence>,
+        now: Long = System.currentTimeMillis(),
+        /**
+         * per-source trust for this fusion, typically [StateOfThoughtPolicy]'s regime
+         * weighting; defaults to the healthy static weights so existing call sites are
+         * unchanged. A degraded regime tightens corroboration through [BeliefReasoner.infer],
+         * never loosens it — ground-truth channels stay at 1.0.
+         */
+        weights: Map<EvidenceSource, Double> = BeliefReasoner.DEFAULT_WEIGHTS
+    ): BeliefState {
         evidence.take(80).forEach { history.addLast(Timed(it, now)) }
         while (history.size > maxEvidence) history.removeFirst()
         while (history.firstOrNull()?.let { now - it.at > halfLifeMs * 6 } == true) history.removeFirst()
@@ -140,7 +150,7 @@ class TemporalBeliefTracker(
             val decay = exp(-(now - it.at).coerceAtLeast(0).toDouble() / halfLifeMs)
             it.evidence.copy(confidence = it.evidence.confidence * decay)
         }.filter { it.confidence >= .03 }
-        return BeliefReasoner.infer(decayed)
+        return BeliefReasoner.infer(decayed, weights)
     }
 
     fun clear() = history.clear()

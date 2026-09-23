@@ -90,6 +90,42 @@ object StateOfThoughtPolicy {
     const val WORLD_MODEL_HEALTHY_WEIGHT = 0.58
     const val WORLD_MODEL_WEIGHT_FLOOR = 0.35
 
+    /**
+     * Builds a [ReasoningRegime] from signals the deterministic loop genuinely produces —
+     * the on-device analogue of reading δ/v/c/H out of a frozen model's internals.
+     *
+     * Each mapping is deliberately simple and monotonic, because the regime only ever
+     * *tightens* corroboration; a regime that could loosen trust would be a security bug:
+     *  - movement starts at 1.0 (no evidence of stalling is not evidence of health either —
+     *    but stalling must be provable from the trajectory before it may tighten anything)
+     *    and decays with the trailing run length of identical screens and with total
+     *    recovery attempts, both damped by 0.5-per-step-style factors.
+     *  - directionalStability is the fraction of *distinct* screens in the recent window:
+     *    a path that revisits itself is oscillating by definition.
+     *  - grounded and uncertainty pass through from the caller (accessibility evidence
+     *    presence and the belief tracker's ambiguity).
+     */
+    fun regime(
+        grounded: Boolean,
+        recentScreens: List<String>,
+        totalRecoveryAttempts: Int,
+        uncertainty: Double
+    ): ReasoningRegime {
+        val stallRun = recentScreens.asReversed().asSequence()
+            .takeWhile { it == recentScreens.lastOrNull() }.count()
+        val stalls = (stallRun - 1).coerceAtLeast(0)
+        val movementByStall = 1.0 / (1.0 + 0.5 * stalls)
+        val movement = movementByStall / (1.0 + 0.25 * totalRecoveryAttempts.coerceAtLeast(0))
+        val stability = if (recentScreens.isEmpty()) 1.0
+        else recentScreens.toSet().size.toDouble() / recentScreens.size
+        return ReasoningRegime(
+            grounded = grounded,
+            movement = movement.coerceIn(0.0, 1.0),
+            directionalStability = stability.coerceIn(0.0, 1.0),
+            uncertainty = uncertainty.coerceIn(0.0, 1.0)
+        )
+    }
+
     fun evidencePolicy(regime: ReasoningRegime): EvidencePolicy {
         val d = regime.degradation
         fun dampen(healthy: Double, floor: Double): Double = healthy - (healthy - floor) * d

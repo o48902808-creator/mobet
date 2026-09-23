@@ -83,6 +83,11 @@ class LiveAndroidAgent(
     private var completionEvidenceHits = 0
     private var ocrCheckInFlight = false
     private val beliefTracker = TemporalBeliefTracker()
+    /**
+     * Last fused belief state. Its ambiguity feeds the *next* regime — the one-cycle lag is
+     * deliberate: the regime describes the trajectory so far, never the decision in flight.
+     */
+    private var lastBelief: BeliefState = BeliefState(emptyList(), 1.0)
     private val frames = ArrayDeque<Pair<String, String>>()
     private val recoveryAttempts = mutableMapOf<FailureKind, Int>()
 
@@ -96,7 +101,8 @@ class LiveAndroidAgent(
         plan = HierarchicalPlanner.decompose(value, hints); hierarchy = plan?.let(::HierarchicalExecutor)
         deliberator = Deliberator(memory, assistant)
         cycles = 0; completionEvidenceHits = 0; ocrCheckInFlight = false; startedAt = android.os.SystemClock.uptimeMillis()
-        runGeneration++; beliefTracker.clear(); stabilizer.reset(); frames.clear(); recoveryAttempts.clear(); cancelled = false
+        runGeneration++; beliefTracker.clear(); lastBelief = BeliefState(emptyList(), 1.0)
+        stabilizer.reset(); frames.clear(); recoveryAttempts.clear(); cancelled = false
         checkpoints.start(value)
         service.showAutonomyNotification()
         emit("Apex autonomous run started · ${plan?.subgoals?.size} subgoals · ${value.maxCycles} cycle budget · OCR ${if (value.allowOcrEvidence) "consented" else "off"} · model ${if (value.allowModelAssistance) "local structured" else "off"}")
@@ -121,7 +127,22 @@ class LiveAndroidAgent(
         val snapshot = service.currentSnapshot()
         if (snapshot == null) { handler.postDelayed(::tick, 400); return }
         val observation = AccessibilityObservationAdapter.adapt(snapshot, service.appVersion(snapshot.packageName))
-        beliefTracker.update(observation.evidence)
+        // The SoT loop, wired end to end: trajectory signals build the regime, the regime
+        // conditions how strongly each evidence channel may corroborate, and the fused
+        // belief's ambiguity becomes part of the next regime. A degraded run therefore
+        // *tightens* the corroboration bar instead of letting stale support stack.
+        val regime = StateOfThoughtPolicy.regime(
+            // Grounded = the loop holds a live accessibility observation of the allowed
+            // package (guaranteed here — tick returned already when the snapshot was null).
+            grounded = true,
+            recentScreens = (frames.map { it.first } + observation.screenId).takeLast(8),
+            totalRecoveryAttempts = recoveryAttempts.values.sum(),
+            uncertainty = lastBelief.ambiguity
+        )
+        lastBelief = beliefTracker.update(
+            observation.evidence,
+            weights = StateOfThoughtPolicy.evidencePolicy(regime).weights
+        )
         memory.invalidate(observation.packageName, observation.appVersion)
         if (observation.packageName != target.allowedPackage) {
             finish(AgentStatus.BLOCKED, "package boundary crossed"); return
@@ -142,13 +163,26 @@ class LiveAndroidAgent(
             service.verifyOcrEvidence(target.successFact) { found, confidence ->
                 if (cancelled || generation != runGeneration) return@verifyOcrEvidence
                 ocrCheckInFlight = false
-                beliefTracker.update(listOf(ObservationEvidence(
+                lastBelief = beliefTracker.update(listOf(ObservationEvidence(
                     "text:${target.successFact.lowercase().trim()}", EvidenceSource.OCR, confidence
-                )))
-                if (found && confidence >= OCR_COMPLETION_CONFIDENCE) completionEvidenceHits++ else completionEvidenceHits = 0
+                )), weights = StateOfThoughtPolicy.evidencePolicy(regime).weights)
+                // The SoT corroboration gate: OCR is the non-ground-truth completion channel,
+                // so under a degraded reasoning regime its evidence must not stack toward a
+                // false "success". Accessibility-channel completion is never blocked (truth
+                // channels are regime-independent by invariant); a settled, moving run lets
+                // OCR confirm again on the next observation.
+                val discounted = found && regime.degradation >= OCR_DEGRADED_REGIME_GATE
+                if (discounted) {
+                    completionEvidenceHits = 0
+                    emit(
+                        "OCR completion evidence discounted under degraded reasoning regime " +
+                            "(uncertainty ${"%.2f".format(lastBelief.ambiguity)})"
+                    )
+                }
+                if (found && !discounted && confidence >= OCR_COMPLETION_CONFIDENCE) completionEvidenceHits++ else completionEvidenceHits = 0
                 if (completionEvidenceHits >= COMPLETION_QUORUM) {
                     finish(AgentStatus.SUCCEEDED, "consented OCR completion evidence verified across $COMPLETION_QUORUM observations")
-                } else if (found) handler.postDelayed(::tick, 350)
+                } else if (found && !discounted) handler.postDelayed(::tick, 350)
                 else continuePlanning(observation, target)
             }
             return
@@ -267,5 +301,11 @@ class LiveAndroidAgent(
     private companion object {
         const val COMPLETION_QUORUM = 2
         const val OCR_COMPLETION_CONFIDENCE = 0.78
+        /**
+         * Regime degradation at or above which OCR completion evidence is discounted rather
+         * than counted. Healthy runs (degradation 0) never reach it; a stalled or looping
+         * trajectory crosses it quickly, exactly when a false "done" would be most costly.
+         */
+        const val OCR_DEGRADED_REGIME_GATE = 0.6
     }
 }
