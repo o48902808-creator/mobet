@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -eux
 
+NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || true)}"
+APPIUM_BIN="${APPIUM_BIN:-$(command -v appium || true)}"
+if test -z "$APPIUM_BIN" && test -n "$(command -v npm || true)"; then
+  APPIUM_BIN="$(npm prefix --global)/bin/appium"
+fi
+
 mkdir -p headless-test-results
 trap 'status=$?; printf "status=%s\nNODE_BIN=%s\nPYTHON_BIN=%s\nAPPIUM_BIN=%s\nPATH=%s\n" "$status" "${NODE_BIN:-}" "${PYTHON_BIN:-}" "${APPIUM_BIN:-}" "$PATH" > headless-test-results/diagnostics.txt; test -z "${APPIUM_PID:-}" || kill "$APPIUM_PID" || true; exit "$status"' EXIT
 

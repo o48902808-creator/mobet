@@ -336,5 +336,8 @@ jobs:
           if test -f headless-test-results/mobet.xml; then
             sed -n '1,160p' headless-test-results/mobet.xml
           fi
+          if test -f headless-test-results/diagnostics.txt; then
+            cat headless-test-results/diagnostics.txt
+          fi
           test ! -f /tmp/appium.log || tail -200 /tmp/appium.log
           exit 1
