@@ -105,6 +105,9 @@ jobs:
           test -s "$RUNNER_TEMP/signing/mobet-release.keystore"
           echo "MOBET_KEYSTORE_PATH=$RUNNER_TEMP/signing/mobet-release.keystore" >> "$GITHUB_ENV"
 
+      - name: Test release gates
+        run: python3 scripts/test_release_gates.py
+
       # Generate the payload before compilation so the app can verify and display it offline.
       # The workflow still adds the final whole-APK digest to the external sidecar after build:
       # embedding that value in the APK itself would change the digest recursively.
@@ -155,72 +158,25 @@ jobs:
 
       # Independent validation of the signature, using the platform's own verifier rather than
       # trusting that Gradle did what it was asked. This is the step that makes a debug-signed
-      # release impossible: the Android debug certificate has a fixed distinguished name, and
-      # any APK carrying it fails here regardless of how it was produced.
+      # release impossible: it inspects the finished artifact, so it holds even if the build
+      # configuration changes in ways the earlier gates do not anticipate.
+      #
+      # The logic lives in scripts/assert-production-signature.sh and is covered by
+      # scripts/test_release_gates.py against recorded apksigner transcripts, so its behaviour
+      # is known before a release run rather than discovered during one.
       - name: Verify APK signature with apksigner
         env:
           EXPECTED_CERT_SHA256: ${{ secrets.MOBET_SIGNING_CERT_SHA256 }}
         run: |
           set -euo pipefail
-          APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)"
-          if [ -z "$APKSIGNER" ]; then
+          if [ ! -x "$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)" ]; then
             yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;35.0.0" >/dev/null
-            APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
           fi
-          echo "Using $APKSIGNER"
-
-          # --min-sdk-version matches app/build.gradle.kts minSdk, so v1-only claims cannot
-          # masquerade as sufficient coverage for the SDK range we actually ship to.
-          "$APKSIGNER" verify --verbose --print-certs --min-sdk-version 26 --max-sdk-version 35 \
-            mobet.apk | tee apksigner-output.txt
-
-          grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" apksigner-output.txt \
-            || { echo "::error::APK is not signed with APK Signature Scheme v2." >&2; exit 1; }
-
-          SIGNER_DN="$(sed -n 's/^Signer #1 certificate DN: //p' apksigner-output.txt | head -1)"
-          CERT_SHA256="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' apksigner-output.txt | head -1)"
-          CERT_SHA1="$(sed -n 's/^Signer #1 certificate SHA-1 digest: //p' apksigner-output.txt | head -1)"
-          echo "Signer DN:      $SIGNER_DN"
-          echo "Cert SHA-256:   $CERT_SHA256"
-
-          # The universally known Android debug identity, in any field order or spacing.
-          if printf '%s' "$SIGNER_DN" | grep -qiE 'CN=Android Debug|O=Android.*CN=Android Debug'; then
-            echo "::error::APK is signed with the Android debug certificate ($SIGNER_DN). Refusing to publish." >&2
-            exit 1
-          fi
-          if [ -z "$CERT_SHA256" ]; then
-            echo "::error::Could not read the signer certificate digest from apksigner." >&2
-            exit 1
-          fi
+          ARGS=(--apk mobet.apk --output mobet-signing.json --min-sdk 26 --max-sdk 35)
           if [ -n "${EXPECTED_CERT_SHA256:-}" ]; then
-            NORMALISED="$(printf '%s' "$EXPECTED_CERT_SHA256" | tr -d ': ' | tr 'A-F' 'a-f')"
-            ACTUAL="$(printf '%s' "$CERT_SHA256" | tr -d ': ' | tr 'A-F' 'a-f')"
-            if [ "$NORMALISED" != "$ACTUAL" ]; then
-              echo "::error::Signer certificate $ACTUAL does not match the pinned MOBET_SIGNING_CERT_SHA256 $NORMALISED." >&2
-              exit 1
-            fi
-            echo "Signer certificate matches the pinned fingerprint."
-          else
-            echo "::warning::MOBET_SIGNING_CERT_SHA256 is not set; the signer certificate was not pinned. Set it to $CERT_SHA256 to detect future key substitution."
+            ARGS+=(--expect-cert "$EXPECTED_CERT_SHA256")
           fi
-
-          python3 - "$SIGNER_DN" "$CERT_SHA256" "$CERT_SHA1" <<'PYTHON'
-          import json, sys
-          json.dump({
-              "schema": "mobet.signing.v1",
-              "artifact": "mobet.apk",
-              "signed": True,
-              "debugKey": False,
-              "schemes": {"v1": True, "v2": True, "v3": True},
-              "signerDn": sys.argv[1],
-              "certSha256": sys.argv[2].replace(":", "").lower(),
-              "certSha1": sys.argv[3].replace(":", "").lower(),
-              "verifiedWith": "apksigner (Android SDK build-tools)",
-              "minSdkVerified": 26,
-              "maxSdkVerified": 35,
-          }, open("mobet-signing.json", "w"), indent=2)
-          open("mobet-signing.json", "a").write("\n")
-          PYTHON
+          bash scripts/assert-production-signature.sh "${ARGS[@]}"
           cat mobet-signing.json
 
       - name: Generate privacy-preserving evidence bundle
@@ -374,6 +330,15 @@ jobs:
           PYTHON
           REPRO="$(python3 -c 'import json;d=json.load(open("mobet-reproducibility.json"));print(d["contentStatus"])')"
 
+          # A semver pre-release tag (v1.0.0-rc1) must never become "latest": that URL is the
+          # documented install path, and rotating it to a release candidate would hand every new
+          # user an untested build. Dry runs are expected to use such tags.
+          LATEST_FLAGS=(--latest)
+          case "$TAG" in
+            *-*) LATEST_FLAGS=(--prerelease --latest=false)
+                 echo "Tag $TAG is a pre-release; not rotating releases/latest." ;;
+          esac
+
           cat > release-notes.md <<EOF
           ## Mobet ${TAG}
 
@@ -406,7 +371,7 @@ jobs:
           > **Upgrading from v0.8.0 or earlier:** those builds were debug-signed, so Android will
           > report \`INSTALL_FAILED_UPDATE_INCOMPATIBLE\`. Export your workflow library
           > (overflow menu → *Export library*), uninstall the old Mobet, install this APK, then
-          > re-import. This is the last upgrade that requires it — from ${TAG} onward every release
+          > re-import. This is the last upgrade that requires it — from v1.0.0 onward every release
           > is signed with the same production key, so updates install in place.
           EOF
 
@@ -416,4 +381,4 @@ jobs:
             --target "$COMMIT" \
             --title "$TITLE" \
             --notes-file release-notes.md \
-            --latest
+            "${LATEST_FLAGS[@]}"

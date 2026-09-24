@@ -66,9 +66,22 @@ Then delete the base64 copy: `shred -u ~/keys/mobet-release.p12.base64`.
 
 ### 3. Verify the wiring before announcing anything
 
-Run *Actions → Release APK* against a throwaway tag (e.g. `v1.0.0-rc1`), then run
-`scripts/verify-release-apk.sh --tag v1.0.0-rc1 --expect-cert <fingerprint>` and delete the
-release and tag afterwards. Cheaper than discovering a bad alias on the real release.
+Run *Actions → Release APK* against a throwaway tag (e.g. `v1.0.0-rc1`), then:
+
+```sh
+bash scripts/verify-release-apk.sh --tag v1.0.0-rc1 --expect-cert <fingerprint>
+gh release delete v1.0.0-rc1 --repo o48902808-creator/mobet --cleanup-tag
+```
+
+Any tag containing a hyphen is treated as a semver pre-release: the workflow publishes it with
+`--prerelease --latest=false`, so a dry run cannot rotate
+`releases/latest/download/mobet.apk` — the documented install path — to a release candidate.
+
+This is cheaper than discovering a wrong `MOBET_KEY_ALIAS` on the real tag. The parts of the
+pipeline that do not need the secrets are already covered by `scripts/test_release_gates.py`,
+which runs on every PR and exercises the gate against recorded apksigner transcripts
+(production, debug key, v1-only, fingerprint mismatch, multiple signers, unreadable
+certificate).
 
 ## How the pipeline refuses to ship a debug-signed APK
 
