@@ -1031,6 +1031,7 @@ class MainActivity : AppCompatActivity(), GenerationHost {
         val history = service?.diagnosticHistory().orEmpty()
         val sheet = MobetUi.ReportSheet(this)
             .title("Execution diagnostics", R.drawable.ic_diagnostics)
+            .exportable("Mobet diagnostics")
             .subtitle(if (history.isEmpty()) null else "${history.size} recent events")
         if (history.isEmpty()) {
             sheet.empty(
@@ -1060,6 +1061,7 @@ class MainActivity : AppCompatActivity(), GenerationHost {
 
         val sheet = MobetUi.ReportSheet(this)
             .title("Audit ledger", R.drawable.ic_ledger)
+            .exportable("Mobet audit ledger")
             .subtitle("Tamper-evident SHA-256 hash chain")
 
         if (entries.isEmpty()) {

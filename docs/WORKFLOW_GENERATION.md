@@ -177,6 +177,13 @@ selector. Every construction path that copies a value from the screen — ground
 traces, crystallization, repair — goes through `SelectorSpec.of`, which refuses template syntax,
 so such a control is simply not groundable and never reaches a document.
 
+## Reports
+
+Every long-form report (generated plan, dry run, policy validation, diagnostics, audit ledger) can
+be copied or shared through the system chooser. A report that can only be read on the phone is
+useless exactly when someone is trying to get help with a failure; only text the sheet already
+displays is exported.
+
 ## OCR as a diagnostic
 
 With the user's OCR consent, recognized text is passed to generation as `SynthesisOptions.ocrText`

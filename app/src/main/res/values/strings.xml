@@ -86,4 +86,9 @@
     <string name="onboarding_step_target">Open the app you want to automate, then come back</string>
     <string name="onboarding_step_plan">Generate a grounded plan, review it, then run it</string>
     <string name="action_command_palette">Search actions</string>
+    <string name="open_accessibility_settings_description">Open Android Accessibility settings to enable the Mobet automation service</string>
+    <string name="restricted_help_description">Explains how to allow restricted settings for a sideloaded install</string>
+    <string name="action_copy_report">Copy</string>
+    <string name="action_share_report">Share</string>
+    <string name="report_copied">Report copied to the clipboard</string>
 </resources>

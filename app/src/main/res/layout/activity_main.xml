@@ -101,6 +101,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/mobet_gap"
+                        android:contentDescription="@string/open_accessibility_settings_description"
                         android:text="@string/open_accessibility_settings"
                         app:icon="@drawable/ic_accessibility" />
 
@@ -112,6 +113,7 @@
                         style="@style/Widget.Mobet.Button.Text"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:contentDescription="@string/restricted_help_description"
                         android:text="@string/restricted_help_link"
                         android:textSize="13sp"
                         app:icon="@drawable/ic_info"

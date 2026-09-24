@@ -5,7 +5,7 @@ import ai.arena.mobet.agent.AgentRunResult
 import ai.arena.mobet.automation.MobetAccessibilityService
 import ai.arena.mobet.automation.ScreenSnapshot
 import ai.arena.mobet.automation.Workflow
-import ai.arena.mobet.planner.PlanSimulator
+import ai.arena.mobet.synthesis.PlanSimulator
 import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.synthesis.AgentCrystallizer
 import ai.arena.mobet.synthesis.PlanDiff
@@ -140,6 +140,7 @@ class GenerationController(private val host: GenerationHost) {
             .title("Generated plan", R.drawable.ic_plan)
             .subtitle("${result.stepCount} steps · policy-validated · nothing has run")
             .monospace(result.report() + (diff?.let { "\n" + it.render() } ?: ""))
+            .exportable("Mobet generated plan")
             .action(activity.getString(R.string.action_close))
             // A generated plan used to dead-end in the editor. Saving it names it, puts it in the
             // library (the unit every export bundle and reminder is addressed by), and makes the
@@ -212,6 +213,7 @@ class GenerationController(private val host: GenerationHost) {
                 .title("Dry run", R.drawable.ic_dryrun)
                 .subtitle("Simulated against the last snapshot — the device is not touched")
                 .monospace(report)
+                .exportable("Mobet dry run")
                 .action(activity.getString(R.string.action_close))
                 .show()
         } catch (error: Exception) {
@@ -262,7 +264,7 @@ class GenerationController(private val host: GenerationHost) {
                         .onFailure { host.status("Cannot re-ground: ${it.message}", Tone.WARNING) }
                 }
             }
-            sheet.action(activity.getString(R.string.action_close)).show()
+            sheet.exportable("Mobet policy validation").action(activity.getString(R.string.action_close)).show()
         } catch (error: Exception) {
             host.status("Invalid workflow: ${error.message}", Tone.DANGER)
         }

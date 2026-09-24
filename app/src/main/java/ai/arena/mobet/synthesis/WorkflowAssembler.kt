@@ -2,7 +2,6 @@ package ai.arena.mobet.synthesis
 
 import ai.arena.mobet.automation.ScreenSnapshot
 import ai.arena.mobet.automation.Workflow
-import ai.arena.mobet.planner.PlanSimulator
 import ai.arena.mobet.policy.AutomationPolicy
 import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.policy.RiskEngine
