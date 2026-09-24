@@ -55,8 +55,16 @@ object TraceSynthesizer {
             require(action in supportedActions) {
                 "Recorded entry ${index + 1} has an unsupported action “$action”"
             }
+            // Recorded selectors come from a foreign app's accessibility tree: reject template
+            // syntax rather than importing a step that would interpolate a secret at run time.
+            SelectorSpec.KEYS.forEach { key ->
+                val recordedValue = raw.optString(key)
+                require(!SelectorSpec.containsTemplateSyntax(recordedValue)) {
+                    "Recorded entry ${index + 1} contains template syntax in its $key selector"
+                }
+            }
             val selector = SelectorSpec.KEYS
-                .firstNotNullOfOrNull { key -> raw.optString(key).takeIf(String::isNotBlank)?.let { SelectorSpec(key, it) } }
+                .firstNotNullOfOrNull { key -> raw.optString(key).takeIf(String::isNotBlank)?.let { SelectorSpec.of(key, it) } }
 
             if (action == "scroll") {
                 scrollRun += 1

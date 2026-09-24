@@ -20,6 +20,7 @@ import ai.arena.mobet.provenance.ProvenanceVerification
 import ai.arena.mobet.provenance.SigstoreProvenance
 import ai.arena.mobet.security.SecretStore
 import ai.arena.mobet.synthesis.AgentCrystallizer
+import ai.arena.mobet.synthesis.PlanDiff
 import ai.arena.mobet.synthesis.PlanQuality
 import ai.arena.mobet.synthesis.SynthesizedWorkflow
 import ai.arena.mobet.synthesis.TraceSynthesizer
@@ -1499,10 +1500,12 @@ class MainActivity : AppCompatActivity() {
 
     /** Shows the generated plan's rationale; the document only changes if the user inserts it. */
     private fun presentSynthesis(result: SynthesizedWorkflow) {
+        // Insert overwrites the editor, so show exactly what would change first.
+        val diff = PlanDiff.between(editor.text?.toString().orEmpty(), result.workflow)
         MobetUi.ReportSheet(this)
             .title("Generated plan", R.drawable.ic_plan)
             .subtitle("${result.stepCount} steps · policy-validated · nothing has run")
-            .monospace(result.report())
+            .monospace(result.report() + (diff?.let { "\n" + it.render() } ?: ""))
             .action(getString(R.string.action_close))
             .action("Insert", primary = true) {
                 editor.setText(result.json)

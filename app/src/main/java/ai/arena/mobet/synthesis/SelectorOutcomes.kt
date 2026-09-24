@@ -60,9 +60,9 @@ object SelectorOutcomes : GroundingPriors {
 
     /** Convenience for the runner, which holds a typed [Selector] rather than a [SelectorSpec]. */
     fun specOf(selector: Selector): SelectorSpec? = when {
-        selector.viewId != null -> SelectorSpec("viewId", selector.viewId!!)
-        selector.description != null -> SelectorSpec("description", selector.description!!)
-        selector.text != null -> SelectorSpec("text", selector.text!!)
+        selector.viewId != null -> SelectorSpec.of("viewId", selector.viewId!!)
+        selector.description != null -> SelectorSpec.of("description", selector.description!!)
+        selector.text != null -> SelectorSpec.of("text", selector.text!!)
         else -> null
     }
 

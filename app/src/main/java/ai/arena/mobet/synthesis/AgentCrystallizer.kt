@@ -121,7 +121,7 @@ object AgentCrystallizer {
         if (step.optString("action") !in setOf("tap", "scroll")) return null
         val selector = SelectorSpec.KEYS
             .firstNotNullOfOrNull { key ->
-                step.optString(key).takeIf(String::isNotBlank)?.let { SelectorSpec(key, it) }
+                step.optString(key).takeIf(String::isNotBlank)?.let { SelectorSpec.of(key, it) }
             } ?: return null
         return JSONObject().put("action", "wait")
             .put(selector.key, selector.value)

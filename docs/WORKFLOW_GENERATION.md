@@ -118,6 +118,27 @@ duplicate taps dropped, scroll runs coalesced to ≤ 3, waits inserted before ta
 through the same back half. Typed text is still never recorded; fills must be added by hand with
 `{{var:…}}` / `{{secret:…}}` references.
 
+### 5b. Crystallizing an autonomous run (`AgentCrystallizer.kt`)
+
+A verified autonomous run knows a route that worked. `AgentCrystallizer` converts the agent's
+retained path (`AgentRunResult.successPath` — accepted, progress-making, non-backtracked
+transitions only) into an ordinary workflow, so the next execution is a deterministic replay
+instead of another exploration. Only `SUCCEEDED` runs crystallize; the run's own `successFact`
+becomes an `expect` assertion on the final step; an action without a replayable selector fails the
+whole conversion rather than silently shortening the route; and the result passes the same risk,
+policy and validation gate as any other plan. The UI offers it as a snackbar action the moment a
+goal verifies.
+
+### 5c. Execution feedback (`SelectorOutcomes.kt`)
+
+`WorkflowRunner` records whether each selector actually resolved, per package. Grounding consults
+that tally through the `GroundingPriors` interface, so plans prefer selectors with a track record.
+Hard limits: the adjustment is clamped to ±0.05 and applied to the *ranking score only* — the
+grounding threshold is evaluated on raw similarity, so history can never resurrect a target that is
+not on screen nor suppress one that is. It requires at least two observations, keeps a bounded LRU
+of selector identities and counts (no screen text, values or secrets), and can be disabled entirely
+with `SynthesisOptions(priors = NoGroundingPriors)`.
+
 ### 6. Recipes (`WorkflowRecipes.kt`)
 
 Parameterised patterns (search, sign-in with stored secrets, navigate-and-toggle, scroll-until,
@@ -125,15 +146,30 @@ dismiss-then-act) expand into the *same goal DSL*, so they inherit every stage a
 are validated and quote/separator characters are rejected, so a parameter cannot inject extra
 clauses into the generated program.
 
+## Screen-borne template injection
+
+Selector values come from a foreign app, and `WorkflowRunner.expand` substitutes `{{var:…}}` and
+`{{secret:…}}` inside selector text and values at run time. A control literally labelled
+`{{secret:bank.pin}}` could therefore get a generated plan to interpolate a stored secret into a
+selector. Every construction path that copies a value from the screen — grounding, recorded
+traces, crystallization, repair — goes through `SelectorSpec.of`, which refuses template syntax,
+so such a control is simply not groundable and never reaches a document.
+
 ## What the user sees
 
 The generated plan is presented as a report — grounding scores and chosen selectors, inserted
 waits, alternates, risk confirmations with their reasons, and the synthesized policy — with an
-explicit **Insert** action. Generation has no device effects; running still requires the existing
-separate, explicit tap.
+explicit **Insert** action. Because Insert overwrites the editor, the report also carries a
+step-level diff (`PlanDiff`, LCS over canonical step signatures) whenever the editor already holds
+a parsable plan. Generation has no device effects; running still requires the existing separate,
+explicit tap.
 
 ## Tests
 
 `app/src/test/java/ai/arena/mobet/synthesis/` covers grammar acceptance and rejection, grounding
-failure modes, determinism, control-flow lowering and label integrity, risk confirmation
-placement, least-privilege policy, trace cleanup, and recipe parameter injection.
+failure modes, control-flow lowering and label integrity, risk confirmation placement,
+least-privilege policy, trace cleanup, recipe parameter injection, optimizer safety, quality
+grading, repair boundaries, crystallization boundaries, and feedback-prior limits. Hardening adds
+seeded grammar fuzzing (every rejection must be an explained error, every acceptance must validate),
+a golden-goal corpus asserting byte-identical output across runs *and* across snapshot element
+permutations, screen-borne template-injection defence, and diff integrity.

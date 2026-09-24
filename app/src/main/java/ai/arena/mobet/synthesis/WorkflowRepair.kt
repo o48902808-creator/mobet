@@ -60,7 +60,7 @@ object WorkflowRepair {
             if (step.optString("action").lowercase() == "confirm") return@map step
             val selector = SelectorSpec.KEYS
                 .firstNotNullOfOrNull { key ->
-                    step.optString(key).takeIf(String::isNotBlank)?.let { SelectorSpec(key, it) }
+                    step.optString(key).takeIf(String::isNotBlank)?.let { SelectorSpec.of(key, it) }
                 } ?: return@map step
 
             val stillPresent = selector.toString() in live

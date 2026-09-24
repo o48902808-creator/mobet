@@ -14,13 +14,30 @@ data class SelectorSpec(val key: String, val value: String) {
     companion object {
         val KEYS = setOf("text", "viewId", "description")
 
-        /** Parses the `key: value` form produced by [ai.arena.mobet.automation.ScreenInspector]. */
-        fun parse(selector: String): SelectorSpec? {
-            val key = selector.substringBefore(':').trim()
-            val value = selector.substringAfter(':').trim()
-            if (key !in KEYS || value.isEmpty()) return null
-            return SelectorSpec(key, value)
+        /**
+         * Screen-borne template syntax.
+         *
+         * Selector values originate in a foreign app, and `WorkflowRunner.expand` substitutes
+         * `{{var:…}}` and `{{secret:…}}` inside selector text and values at run time. A control
+         * literally labelled `{{secret:bank.pin}}` could therefore get a generated plan to
+         * interpolate a stored secret into a selector — a screen-to-secret injection path that
+         * exists only because generation copies screen text into the plan. Every construction
+         * path that takes a value from the screen goes through [of], which refuses them.
+         */
+        private val TEMPLATE_SYNTAX = Regex("\\{\\{|}}")
+
+        fun containsTemplateSyntax(value: String): Boolean = TEMPLATE_SYNTAX.containsMatchIn(value)
+
+        /** Null-safe factory for screen-derived values; returns null for unusable input. */
+        fun of(key: String, value: String): SelectorSpec? {
+            val trimmed = value.trim()
+            if (key !in KEYS || trimmed.isEmpty() || containsTemplateSyntax(trimmed)) return null
+            return SelectorSpec(key, trimmed)
         }
+
+        /** Parses the `key: value` form produced by [ai.arena.mobet.automation.ScreenInspector]. */
+        fun parse(selector: String): SelectorSpec? =
+            of(selector.substringBefore(':').trim(), selector.substringAfter(':'))
     }
 }
 
@@ -69,6 +86,8 @@ object SnapshotGrounder {
     /** Upper bound on alternates emitted for an ambiguous target. */
     const val MAX_ALTERNATES = 4
 
+
+
     fun ground(
         target: String,
         elements: List<InspectedElement>,
@@ -84,6 +103,9 @@ object SnapshotGrounder {
         val ranked = pool.asSequence()
             .mapNotNull { element ->
                 val selector = SelectorSpec.parse(element.selector) ?: return@mapNotNull null
+                // Labels are copied into report text and, for text selectors, into the plan
+                // itself; a label carrying template syntax is dropped with the candidate.
+                if (SelectorSpec.containsTemplateSyntax(element.label)) return@mapNotNull null
                 GroundedCandidate(
                     selector = selector,
                     label = element.label,
