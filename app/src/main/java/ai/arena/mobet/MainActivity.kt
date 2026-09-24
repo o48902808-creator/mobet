@@ -18,9 +18,11 @@ import ai.arena.mobet.provenance.BuildIntegrityReport
 import ai.arena.mobet.provenance.ProvenanceVerification
 import ai.arena.mobet.provenance.SigstoreProvenance
 import ai.arena.mobet.security.SecretStore
+import ai.arena.mobet.synthesis.PlanQuality
 import ai.arena.mobet.synthesis.SynthesizedWorkflow
 import ai.arena.mobet.synthesis.TraceSynthesizer
 import ai.arena.mobet.synthesis.WorkflowRecipes
+import ai.arena.mobet.synthesis.WorkflowRepair
 import ai.arena.mobet.synthesis.WorkflowSynthesizer
 import ai.arena.mobet.ui.JsonErrorLocator
 import ai.arena.mobet.ui.JsonHighlighter
@@ -1525,7 +1527,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun validatePlan() {
         try {
-            val workflow = Workflow.parse(editor.text.toString())
+            val source = editor.text.toString()
+            val workflow = Workflow.parse(source)
             val violations = PlanValidator.validate(workflow)
             val sheet = MobetUi.ReportSheet(this).title("Policy validation", R.drawable.ic_policy)
             if (violations.isEmpty()) {
@@ -1535,7 +1538,9 @@ class MainActivity : AppCompatActivity() {
                             "Actions     ${workflow.steps.size} / ${workflow.policy.maxActions}\n" +
                             "Runtime     ${workflow.policy.maxRuntimeMs} ms\n" +
                             "Visual      ${if (workflow.policy.allowVisualFallbacks) "allowed" else "blocked"}\n" +
-                            "Self-heal   ${if (workflow.policy.allowSelfHealing) "allowed" else "blocked"}"
+                            "Self-heal   ${if (workflow.policy.allowSelfHealing) "allowed" else "blocked"}\n\n" +
+                            // Advisory robustness read-out; policy already approved the plan.
+                            PlanQuality.analyze(workflow).summary()
                     )
             } else {
                 sheet.banner("✖ Rejected — ${violations.size} violation${if (violations.size == 1) "" else "s"}", Tone.DANGER)
@@ -1547,6 +1552,17 @@ class MainActivity : AppCompatActivity() {
                             showChevron = false
                         )
                     })
+            }
+            // Authoring-time repair: re-ground drifted selectors against the screen the user is
+            // on right now. No device effects, no run-time self-healing — the repaired plan is
+            // shown as a report and only replaces the document if the user inserts it.
+            val snapshot = MobetAccessibilityService.instance?.latestSnapshot()
+            if (snapshot != null && snapshot.packageName == workflow.packageName) {
+                sheet.action("Re-ground to screen") {
+                    WorkflowRepair.repair(source, snapshot)
+                        .onSuccess(::presentSynthesis)
+                        .onFailure { showStatus("Cannot re-ground: ${it.message}", Tone.WARNING) }
+                }
             }
             sheet.action(getString(R.string.action_close)).show()
         } catch (error: Exception) {

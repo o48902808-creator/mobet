@@ -70,10 +70,22 @@ class WorkflowSynthesizerTest {
 
     @Test
     fun fillGroundsAgainstEditableControlsOnly() {
-        val result = synthesize("fill \"Search settings\" with \"wifi\"").getOrThrow()
+        val result = synthesize(
+            "fill \"Search settings\" with \"wifi\"",
+            SynthesisOptions(parameterizeValues = false)
+        ).getOrThrow()
         val fill = result.workflow.steps.first { it.action == "fill" }
         assertEquals("com.android.settings:id/search", fill.selector.viewId)
         assertEquals("wifi", fill.value)
+    }
+
+    @Test
+    fun literalFillValuesAreHoistedIntoVariables() {
+        val result = synthesize("fill \"Search settings\" with \"wifi\"").getOrThrow()
+        val fill = result.workflow.steps.first { it.action == "fill" }
+        assertEquals("{{var:search}}", fill.value)
+        assertEquals("wifi", result.workflow.variables["search"])
+        assertTrue(PlanValidator.validate(result.workflow).isEmpty())
     }
 
     @Test

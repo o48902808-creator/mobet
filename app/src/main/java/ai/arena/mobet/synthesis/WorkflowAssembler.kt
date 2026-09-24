@@ -17,7 +17,9 @@ data class SynthesisNote(val stage: String, val detail: String) {
 data class SynthesizedWorkflow(
     val json: String,
     val workflow: Workflow,
-    val notes: List<SynthesisNote>
+    val notes: List<SynthesisNote>,
+    /** Advisory robustness measurement; never a gate — [PlanValidator] already decided legality. */
+    val quality: PlanQuality
 ) {
     val stepCount: Int get() = workflow.steps.size
 
@@ -30,6 +32,11 @@ data class SynthesizedWorkflow(
         appendLine("Packages    ${workflow.policy.allowedPackages.sorted().joinToString()}")
         appendLine("Runtime     ${workflow.policy.maxRuntimeMs} ms")
         appendLine("Visual      ${if (workflow.policy.allowVisualFallbacks) "allowed" else "blocked"}")
+        if (workflow.variables.isNotEmpty()) {
+            appendLine("Variables   ${workflow.variables.keys.sorted().joinToString()}")
+        }
+        appendLine()
+        append(quality.summary())
         appendLine()
         appendLine("Synthesis decisions")
         notes.forEach { appendLine("  • ${it.stage}: ${it.detail}") }
@@ -57,7 +64,9 @@ internal object WorkflowAssembler {
         variables: Map<String, String> = emptyMap(),
         extraPackages: Set<String> = emptySet(),
         notes: List<SynthesisNote> = emptyList(),
-        maxSteps: Int = 80
+        maxSteps: Int = 80,
+        optimize: Boolean = true,
+        parameterizeValues: Boolean = false
     ): Result<SynthesizedWorkflow> = runCatching {
         require(steps.isNotEmpty()) { "Synthesis produced no steps" }
         require(steps.size <= maxSteps) { "Synthesis produced ${steps.size} steps; the limit is $maxSteps" }
@@ -67,7 +76,14 @@ internal object WorkflowAssembler {
         }
 
         val trail = notes.toMutableList()
-        val guarded = insertRiskConfirmations(steps, targetPackage, trail)
+        // Optimize first (fewer steps to score), parameterize second (risk is assessed on the
+        // *substituted* value by the runner anyway), risk-gate last so gates are never optimized
+        // away and always sit immediately before the step they guard.
+        val lean = if (optimize) PlanOptimizer.optimize(steps, trail) else steps
+        val hoisted = if (parameterizeValues) PlanParameterizer.apply(lean, trail) else
+            PlanParameterizer.Parameterized(lean, emptyMap())
+        val allVariables = variables + hoisted.variables
+        val guarded = insertRiskConfirmations(hoisted.steps, targetPackage, trail)
         require(guarded.size <= maxSteps) {
             "Risk confirmations push the plan to ${guarded.size} steps; the limit is $maxSteps"
         }
@@ -90,7 +106,7 @@ internal object WorkflowAssembler {
         val root = JSONObject()
             .put("name", name.trim().take(80).ifBlank { "Generated workflow" })
             .put("package", targetPackage)
-            .put("variables", JSONObject(variables))
+            .put("variables", JSONObject(allVariables as Map<*, *>))
             .put(
                 "policy",
                 JSONObject()
@@ -111,7 +127,7 @@ internal object WorkflowAssembler {
                 (violation.step?.let { "step $it: " } ?: "") + violation.message
             }
         }
-        SynthesizedWorkflow(formatted, workflow, trail)
+        SynthesizedWorkflow(formatted, workflow, trail, PlanQuality.analyze(workflow))
     }
 
     /**

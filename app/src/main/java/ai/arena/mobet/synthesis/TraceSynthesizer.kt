@@ -14,6 +14,7 @@ data class TraceOptions(
     val insertWaits: Boolean = true,
     val defaultTimeoutMs: Long = 5_000,
     val defaultRetries: Int = 1,
+    val optimize: Boolean = true,
     val maxSteps: Int = 80,
     val name: String = "Recorded workflow"
 )
@@ -109,7 +110,8 @@ object TraceSynthesizer {
             targetPackage = packageName,
             steps = normalized,
             notes = notes,
-            maxSteps = options.maxSteps
+            maxSteps = options.maxSteps,
+            optimize = options.optimize
         ).getOrThrow()
     }
 }

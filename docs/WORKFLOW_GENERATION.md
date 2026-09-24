@@ -65,6 +65,19 @@ snapshot always yields byte-identical JSON.
 * Conditionals become `branch` with an explicit zero-length `delay` join label; loops become
   `repeatUntil` that always jumps backwards with an iteration cap of 1..50.
 
+### 3b. Optimizer and parameterization (`PlanOptimizer.kt`, `PlanParameterizer.kt`)
+
+Lowering is deliberately naive, so a deterministic peephole pass runs before risk gating:
+consecutive waits on the same selector are collapsed, unreachable zero-length join markers are
+dropped, and over-long runs of blind scrolls are trimmed. It only ever *removes* work, and never
+removes a jump target, a step carrying an `expect`, or a label (labels move forward onto the
+surviving step).
+
+Literal `fill` values are then hoisted into named workflow variables (`{{var:search}}`), turning
+a single-use plan into an editable template. Credential-looking values and existing
+`{{var:…}}`/`{{secret:…}}` references are deliberately left alone — promoting a password into a
+plaintext variable would make it more visible, not less.
+
 ### 4. Risk, policy, validation (`WorkflowAssembler.kt`)
 
 Shared by *every* generation path:
@@ -79,6 +92,24 @@ Shared by *every* generation path:
 * The JSON is then really parsed by `Workflow.parse` and run through `PlanValidator`. A generated
   plan that would fail validation is returned as an **error**, never as a document the user might
   run.
+
+### 4b. Quality analysis (`PlanQuality.kt`)
+
+Every generated plan is scored 0–100 (grade A–E) on *robustness*, which is a different question
+from legality. This is advisory only: it can never block or rewrite a plan `PlanValidator` has
+approved. Deductions cover unverified acting steps, text-only selectors that drift with app
+wording or device language, plaintext credential values, loop caps near the maximum, and plans
+that exactly fill their action budget. The summary appears in the generation report and in the
+Policy validation sheet.
+
+### 4c. Repair / re-grounding (`WorkflowRepair.kt`)
+
+An existing plan can be re-grounded against the screen the user is on now: selectors that no
+longer exist are fuzzy-rematched, and the result goes back through the ordinary risk → policy →
+validate pipeline. It is authoring-time only (`allowSelfHealing` stays off), never retargets a
+different package, refuses to guess when the new match is ambiguous, reports vanished controls
+instead of silently dropping the step, and preserves values, expectations, labels and control
+flow. Exposed as **Re-ground to screen** in the Policy validation sheet.
 
 ### 5. Trace synthesis (`TraceSynthesizer.kt`)
 

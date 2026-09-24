@@ -16,6 +16,10 @@ data class SynthesisOptions(
     val assertNavigation: Boolean = true,
     /** Turn an ambiguous target into a bounded `tryAlternates` instead of rejecting the goal. */
     val allowAlternates: Boolean = true,
+    /** Run the deterministic peephole optimizer over the lowered steps. */
+    val optimize: Boolean = true,
+    /** Hoist literal (non-credential) fill values into named workflow variables. */
+    val parameterizeValues: Boolean = true,
     val defaultRetries: Int = 1,
     val defaultTimeoutMs: Long = 5_000,
     val maxSteps: Int = 80,
@@ -72,7 +76,9 @@ object WorkflowSynthesizer {
             variables = emptyMap(),
             extraPackages = lowering.launchPackages,
             notes = lowering.notes,
-            maxSteps = options.maxSteps
+            maxSteps = options.maxSteps,
+            optimize = options.optimize,
+            parameterizeValues = options.parameterizeValues
         ).getOrThrow()
     }
 
