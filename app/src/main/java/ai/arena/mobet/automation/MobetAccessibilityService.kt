@@ -12,6 +12,7 @@ class MobetAccessibilityService : AccessibilityService() {
     private val ledger by lazy { ai.arena.mobet.audit.AuditLedger(this) }
     private val worldModel by lazy { ai.arena.mobet.agent.WorldModel(this) }
     private val agentMemory by lazy { ai.arena.mobet.agent.PersistentExperienceStore(this) }
+    private val secretStore by lazy { ai.arena.mobet.security.SecretStore(this) }
     private val liveAgent by lazy {
         ai.arena.mobet.agent.LiveAndroidAgent(this, agentMemory, ::emit, ::emitTimeline)
     }
@@ -72,8 +73,25 @@ class MobetAccessibilityService : AccessibilityService() {
     fun run(workflow: Workflow) {
         liveAgent.cancel("Autonomous run replaced by workflow", quiet = true)
         runner?.cancel("Replaced by a new run")
-        runner = WorkflowRunner(this, ::emit, emitTimeline = ::emitTimeline).also { it.start(workflow) }
+        runner = workflowRunner().also { it.start(workflow) }
     }
+
+    private fun workflowRunner(
+        onFinished: ((Boolean, String) -> Unit)? = null,
+        launchTarget: Boolean = true,
+        enforcePackageAtFirstStep: Boolean = false
+    ): WorkflowRunner = WorkflowRunner(
+        driver = AccessibilityDriver(this),
+        emitLog = ::emit,
+        onFinished = onFinished,
+        launchTarget = launchTarget,
+        enforcePackageAtFirstStep = enforcePackageAtFirstStep,
+        emitTimeline = ::emitTimeline,
+        hooks = AccessibilityWorkflowRunnerHooks(this),
+        secretResolver = SecretResolver(secretStore::get),
+        worldModel = worldModel,
+        agentMemory = agentMemory
+    )
 
     /**
      * The last autonomous run that verified its goal, paired with that goal, so the UI can offer
@@ -377,8 +395,10 @@ class MobetAccessibilityService : AccessibilityService() {
         val violations = ai.arena.mobet.policy.PlanValidator.validate(workflow)
         if (violations.isNotEmpty()) { callback(false, "PlanValidator blocked: ${violations.joinToString { it.message }}"); return }
         runner?.cancel("Replaced by next guarded action")
-        runner = WorkflowRunner(
-            this, ::emit, callback, launchTarget = false, enforcePackageAtFirstStep = true
+        runner = workflowRunner(
+            onFinished = callback,
+            launchTarget = false,
+            enforcePackageAtFirstStep = true
         ).also { it.start(workflow) }
     }
 

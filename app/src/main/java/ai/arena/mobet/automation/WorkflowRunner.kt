@@ -1,14 +1,13 @@
 package ai.arena.mobet.automation
 
+import ai.arena.mobet.agent.ExperienceStore
 import ai.arena.mobet.agent.ScreenFingerprint
 import ai.arena.mobet.agent.SelectorResolver
-import ai.arena.mobet.agent.WorldModel
 import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.policy.RiskAssessment
 import ai.arena.mobet.policy.RiskEngine
 import ai.arena.mobet.synthesis.SelectorOutcomes
 import ai.arena.mobet.policy.RiskTier
-import ai.arena.mobet.security.SecretStore
 
 /**
  * Sequential observe–act state machine with runtime safety rails:
@@ -21,17 +20,18 @@ import ai.arena.mobet.security.SecretStore
  *  - passive world-model learning of screen transitions for future grounded planning.
  */
 class WorkflowRunner(
-    private val service: MobetAccessibilityService,
+    private val driver: DeviceDriver,
     private val emitLog: (String) -> Unit,
     private val onFinished: ((Boolean, String) -> Unit)? = null,
     private val launchTarget: Boolean = true,
     private val enforcePackageAtFirstStep: Boolean = false,
     private val emitTimeline: (ExecutionTimelineEvent) -> Unit = {},
-    private val scheduler: UiScheduler = HandlerUiScheduler()
+    private val scheduler: UiScheduler = HandlerUiScheduler(),
+    private val hooks: WorkflowRunnerHooks = WorkflowRunnerHooks.NONE,
+    private val secretResolver: SecretResolver = SecretResolver.NONE,
+    private val worldModel: ScreenTransitionMemory = ScreenTransitionMemory.NONE,
+    private val agentMemory: ExperienceStore = WorkflowRunnerDefaults.memory
 ) {
-    private val secrets = SecretStore(service)
-    private val worldModel = WorldModel(service)
-    private val agentMemory = ai.arena.mobet.agent.PersistentExperienceStore(service)
     private var cancelled = false
     private var completionDelivered = false
     private var workflow: Workflow? = null
@@ -131,7 +131,7 @@ class WorkflowRunner(
             "Policy approved “${value.name}” (${value.steps.size}/${value.policy.maxActions} actions, " +
                 "$elevated elevated-risk, self-healing ${if (value.policy.allowSelfHealing) "on" else "off"})"
         )
-        if (launchTarget && value.packageName != null && !service.launch(value.packageName)) {
+        if (launchTarget && value.packageName != null && !driver.launch(value.packageName)) {
             finish("Could not launch ${value.packageName}")
             return
         }
@@ -178,18 +178,18 @@ class WorkflowRunner(
             finish("Runtime budget exceeded (${flow.policy.maxRuntimeMs} ms)")
             return
         }
-        service.unsafeSurfaceReason(flow.policy.allowedPackages)?.let { reason ->
+        hooks.unsafeSurfaceReason(flow.policy.allowedPackages)?.let { reason ->
             finish("Surface boundary blocked action: $reason")
             return
         }
-        val activePackage = service.activePackageName()
+        val activePackage = driver.activePackageName()
         if ((index > 0 || enforcePackageAtFirstStep) && activePackage != null && activePackage !in flow.policy.allowedPackages) {
             finish("Package boundary blocked action in $activePackage")
             return
         }
         activePackage?.let { packageName ->
             flow.policy.packageVersions[packageName]?.let { required ->
-                val actual = service.appVersion(packageName)
+                val actual = driver.appVersion(packageName)
                 if (actual != required) {
                     finish("App version boundary blocked $packageName: required $required, found ${actual ?: "unknown"}")
                     return
@@ -236,7 +236,7 @@ class WorkflowRunner(
         val approved = nextActionApproved
         if (step.action != "confirm") nextActionApproved = false
         if (step.action !in ControlFlow.CONTROL_ACTIONS && step.action !in setOf("wait", "delay", "confirm", "ocrwait")) {
-            service.noteAutomatedAction()
+            hooks.noteAutomatedAction()
         }
         when (step.action) {
             // Cross-app switching. The destination was validated against policy.allowedPackages
@@ -248,7 +248,7 @@ class WorkflowRunner(
                 if (target.isNullOrBlank()) finish("launch requires a package")
                 else if (target !in flow.policy.allowedPackages)
                     finish("launch target $target is not in policy.allowedPackages")
-                else if (!service.launch(target)) finish("Could not launch $target")
+                else if (!driver.launch(target)) finish("Could not launch $target")
                 else {
                     log("Launched $target")
                     // Treat the switch as a fresh screen so the loop guard does not attribute
@@ -258,8 +258,8 @@ class WorkflowRunner(
                     advance(maxOf(step.delayMs, LAUNCH_SETTLE_MS))
                 }
             }
-            "back" -> complete(service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK), step)
-            "home" -> complete(service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME), step)
+            "back" -> complete(driver.back(), step)
+            "home" -> complete(driver.home(), step)
             "delay" -> advance(step.delayMs)
             "branch" -> {
                 val satisfied = evaluateControlEvidence(step)
@@ -297,7 +297,7 @@ class WorkflowRunner(
             "tryalternates" -> {
                 // First-match selector fallback, probed synchronously on the settled screen:
                 // authors place a wait before this step when settling is required.
-                if (service.root()?.also { it.release() } == null) {
+                if (driver.root()?.also { it.release() } == null) {
                     finish("tryAlternates: screen unavailable")
                     return
                 }
@@ -319,7 +319,7 @@ class WorkflowRunner(
                     }
                     // find owns and releases the root supplied for this probe. A fresh root is
                     // intentional: a failed traversal must not invalidate the next alternative.
-                    val candidate = find(service.root(), step.options[i])
+                    val candidate = find(driver.root(), step.options[i])
                     if (candidate != null) {
                         chosen = candidate
                         chosenIndex = i
@@ -364,7 +364,7 @@ class WorkflowRunner(
                         finish("Confirmation timed out — action denied")
                     }
                 }
-                service.requestConfirmation(step.message ?: "Allow the next workflow action?", hardened)
+                hooks.requestConfirmation(step.message ?: "Allow the next workflow action?", hardened)
             }
             "tappoint", "swipe" -> {
                 if (!approved) finish("${step.action} requires an immediately preceding confirmation")
@@ -374,7 +374,7 @@ class WorkflowRunner(
                     if (x == null || y == null) finish("${step.action} requires xPercent and yPercent")
                     else if (step.action == "swipe" && (step.endXPercent == null || step.endYPercent == null))
                         finish("swipe requires endXPercent and endYPercent")
-                    else service.performPointGesture(
+                    else driver.performPointGesture(
                         x, y,
                         if (step.action == "swipe") step.endXPercent else null,
                         if (step.action == "swipe") step.endYPercent else null,
@@ -384,7 +384,7 @@ class WorkflowRunner(
             }
             "capture" -> {
                 if (!approved) finish("capture requires an immediately preceding confirmation")
-                else service.captureScreen { ok, result ->
+                else driver.captureScreen { ok, result ->
                     if (ok) { log("Screenshot saved privately: $result"); advance(step.delayMs) }
                     else finish(result)
                 }
@@ -393,11 +393,11 @@ class WorkflowRunner(
                 val query = step.selector.text
                 if (!approved) finish("${step.action} requires an immediately preceding confirmation")
                 else if (query == null) finish("${step.action} requires text")
-                else service.findVisualText(query) { found, detail, x, y ->
+                else driver.findVisualText(query) { found, detail, x, y ->
                     log(detail)
                     if (!found) finish(detail)
                     else if (step.action == "ocrwait") advance(step.delayMs)
-                    else service.performPointGesture(x, y, null, null, 120) { tapped ->
+                    else driver.performPointGesture(x, y, null, null, 120) { tapped ->
                         if (tapped) advance(step.delayMs) else finish("Visual tap was cancelled")
                     }
                 }
@@ -417,8 +417,8 @@ class WorkflowRunner(
 
     /** Fingerprints the visible screen, feeds the world model, and trips the loop guard. */
     private fun observeScreen(flow: Workflow) {
-        val packageName = service.activePackageName() ?: return
-        val root = service.root() ?: return
+        val packageName = driver.activePackageName() ?: return
+        val root = driver.root() ?: return
         val snapshot = try {
             ScreenInspector.inspect(root, packageName)
         } finally {
@@ -460,8 +460,8 @@ class WorkflowRunner(
      */
     private fun evaluateControlEvidence(step: Step): Boolean {
         val expectation = step.expect ?: return true
-        val packageName = service.activePackageName() ?: return false
-        val root = service.root() ?: return false
+        val packageName = driver.activePackageName() ?: return false
+        val root = driver.root() ?: return false
         val snapshot = try {
             ScreenInspector.inspect(root, packageName)
         } finally {
@@ -562,7 +562,7 @@ class WorkflowRunner(
             }
             Regex("\\{\\{secret:([A-Za-z0-9_.-]+)}}").findAll(result).forEach {
                 val name = it.groupValues[1]
-                val value = secrets.get(name) ?: run {
+                val value = secretResolver.get(name) ?: run {
                     finish("Missing or unreadable secret: $name")
                     return null
                 }
@@ -606,7 +606,7 @@ class WorkflowRunner(
                 finish("Runtime budget exceeded (${flow.policy.maxRuntimeMs} ms)")
                 return
             }
-            val node = find(service.root(), step.selector)
+            val node = find(driver.root(), step.selector)
             if (node != null) {
                 // Execution feedback: this selector really resolved on this device, in this app
                 // version. Generation consults the tally as a bounded ranking tie-break so future
@@ -670,12 +670,17 @@ class WorkflowRunner(
             log("Self-healing skipped: step risk exceeds the healing threshold")
             return null
         }
-        val snapshot = service.liveSnapshot() ?: return null
-        val packageName = snapshot.packageName
+        val packageName = driver.activePackageName() ?: return null
         if (packageName !in flow.policy.allowedPackages) return null
+        val root = driver.root() ?: return null
+        val snapshot = try {
+            ScreenInspector.inspect(root, packageName)
+        } finally {
+            root.release()
+        }
         val healed = SelectorResolver.heal(step.selector, snapshot) ?: return null
         healedSteps += index
-        agentMemory.recordRepair(packageName, serialize(step.selector), serialize(healed.selector), service.appVersion(packageName))
+        agentMemory.recordRepair(packageName, serialize(step.selector), serialize(healed.selector), driver.appVersion(packageName))
         val repairMethod = healed.selector.let {
             if (it.viewId != null) "viewId" else if (it.description != null) "description" else "text"
         }
@@ -690,7 +695,7 @@ class WorkflowRunner(
     }
 
     private fun exists(selector: Selector): Boolean {
-        val node = find(service.root(), selector) ?: return false
+        val node = find(driver.root(), selector) ?: return false
         node.release()
         return true
     }
@@ -720,7 +725,7 @@ class WorkflowRunner(
             queue.addAll(node.children)
             if (node !== root) node.release()
         }
-        queue.forEach(UiNode::release)
+        queue.forEach { it.release() }
         root.release()
         return null
     }

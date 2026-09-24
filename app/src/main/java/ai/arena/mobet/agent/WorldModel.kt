@@ -1,6 +1,7 @@
 package ai.arena.mobet.agent
 
 import android.content.Context
+import ai.arena.mobet.automation.ScreenTransitionMemory
 import org.json.JSONObject
 
 /**
@@ -13,11 +14,11 @@ import org.json.JSONObject
  * future planners a grounded navigation prior ("tap:Network & internet reliably leads to screen
  * 3f2a…") without any network dependency.
  */
-class WorldModel(context: Context) {
+class WorldModel(context: Context) : ScreenTransitionMemory {
     private val preferences = context.getSharedPreferences("world_model", Context.MODE_PRIVATE)
 
     @Synchronized
-    fun record(packageName: String, fromScreen: String, action: String, toScreen: String) {
+    override fun record(packageName: String, fromScreen: String, action: String, toScreen: String) {
         if (fromScreen == toScreen) return
         val root = load()
         val edges = root.optJSONObject("edges") ?: JSONObject().also { root.put("edges", it) }
