@@ -21,6 +21,8 @@ import ai.arena.mobet.provenance.SigstoreProvenance
 import ai.arena.mobet.security.SecretStore
 import ai.arena.mobet.synthesis.PlanQuality
 import ai.arena.mobet.synthesis.TraceSynthesizer
+import ai.arena.mobet.ui.CommandPalette
+import ai.arena.mobet.ui.CommandPalette.Command
 import ai.arena.mobet.ui.GenerationController
 import ai.arena.mobet.ui.GenerationHost
 import ai.arena.mobet.ui.JsonErrorLocator
@@ -46,11 +48,15 @@ import android.text.method.ScrollingMovementMethod
 import android.view.View
 import android.view.WindowManager
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.AccessibilityDelegateCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.view.ViewCompat
@@ -95,6 +101,10 @@ class MainActivity : AppCompatActivity(), GenerationHost {
     override fun replaceSource(json: String) = editor.setText(json)
     override fun status(message: String, tone: Tone) = showStatus(message, tone)
 
+    private lateinit var onboardingCard: View
+    private lateinit var onboardingStepOne: TextView
+    private lateinit var onboardingStepTwo: TextView
+    private lateinit var onboardingStepThree: TextView
     private lateinit var serviceState: TextView
     private lateinit var serviceDetail: TextView
     private lateinit var serviceDot: View
@@ -181,6 +191,7 @@ class MainActivity : AppCompatActivity(), GenerationHost {
         bindViews()
         applyWindowInsets()
         wireActions()
+        applyAdaptiveWidth()
         configureMotion()
         loadWorkflowSource()
         if (savedInstanceState == null) playEntranceChoreography()
@@ -250,6 +261,15 @@ class MainActivity : AppCompatActivity(), GenerationHost {
     private fun bindViews() {
         serviceCard = findViewById(R.id.serviceCard)
         workflowCard = findViewById(R.id.workflowCard)
+        onboardingCard = findViewById(R.id.onboardingCard)
+        onboardingStepOne = findViewById(R.id.onboardingStepOne)
+        onboardingStepTwo = findViewById(R.id.onboardingStepTwo)
+        onboardingStepThree = findViewById(R.id.onboardingStepThree)
+        findViewById<View>(R.id.onboardingDismiss).setOnClickListener {
+            getSharedPreferences("onboarding", MODE_PRIVATE).edit().putBoolean("done", true).apply()
+            onboardingCard.visibility = View.GONE
+            showStatus("Getting started hidden — the Help menu still explains each step", Tone.NEUTRAL)
+        }
         serviceState = findViewById(R.id.serviceState)
         serviceDetail = findViewById(R.id.serviceDetail)
         serviceDot = findViewById(R.id.serviceDot)
@@ -268,6 +288,7 @@ class MainActivity : AppCompatActivity(), GenerationHost {
 
         findViewById<MaterialToolbar>(R.id.toolbar).setOnMenuItemClickListener { item ->
             when (item.itemId) {
+                R.id.menu_palette -> { showCommandPalette(); true }
                 R.id.menu_help -> { showHelp(); true }
                 R.id.menu_export -> { exportLibrary(); true }
                 R.id.menu_import -> { importLibrary(); true }
@@ -277,6 +298,54 @@ class MainActivity : AppCompatActivity(), GenerationHost {
                 else -> false
             }
         }
+    }
+
+    /**
+     * Every action in the app, searchable. The list mirrors the on-screen order so an empty query
+     * looks like the layout the user already knows.
+     */
+    private fun showCommandPalette() {
+        val serviceReady = MobetAccessibilityService.instance != null
+        val commands = buildList {
+            add(Command("Generate grounded plan", "Describe a goal in plain clauses", "synthesize goal ai create", R.drawable.ic_plan) { generation.showGoalPlanner() })
+            add(Command("Run goal autonomously", "Bounded agent run with live verification", "agent apex autonomous", R.drawable.ic_agent) { showAutonomousGoal() })
+            add(Command("Dry run", "Simulate the plan without touching the device", "simulate preview test", R.drawable.ic_dryrun) { generation.dryRunPlan() })
+            add(Command("Validate policy", "Check the plan against its policy and re-ground it", "check lint verify repair", R.drawable.ic_policy) { generation.validatePlan() })
+            add(Command("Edit steps", "Visual step builder over the same document", "builder visual form", R.drawable.ic_steps) { showStepBuilder() })
+            add(Command("Record taps", "Capture your own interactions as a draft plan", "capture trace learn", R.drawable.ic_record) { startRecorder() })
+            add(Command("Choose target app", "Point the plan at an installed package", "package app switch", R.drawable.ic_apps) { chooseTargetApp() })
+            add(Command("Save to library", "Store the current document under a name", "store keep name", R.drawable.ic_save) { saveToLibrary() })
+            add(Command("Load from library", "Open a saved workflow", "open restore browse", R.drawable.ic_library) { loadFromLibrary() })
+            add(Command("Secrets", "Manage values referenced as secret placeholders", "password credential vault", R.drawable.ic_secret) { manageSecrets() })
+            add(Command("Inspect screen", "List the accessibility nodes on the current screen", "elements nodes selectors", R.drawable.ic_inspect) { showInspector() })
+            add(Command("Diagnostics", "Environment, permissions and service health", "health debug status", R.drawable.ic_diagnostics) { showDiagnostics() })
+            add(Command("Captures", "Screenshots and OCR output you consented to", "screenshots ocr images", R.drawable.ic_captures) { showLatestCapture() })
+            add(Command("Audit ledger", "Tamper-evident record of what ran", "log history ledger", R.drawable.ic_ledger) { showAuditLedger() })
+            add(Command("Agent memory", "What the agent learned, and how to forget it", "experience learning forget", R.drawable.ic_memory) { showAgentMemory() })
+            add(Command("Reminders", "Scheduled prompts to run a saved workflow", "schedule alarm later", R.drawable.ic_diagnostics) { showReminders() })
+            add(Command("Export library", "Write a signed bundle of saved workflows", "bundle share backup", R.drawable.ic_save) { exportLibrary() })
+            add(Command("Import library", "Load a bundle after review", "bundle restore install", R.drawable.ic_library) { importLibrary() })
+            add(Command("Build integrity", "Verify this build's signing identity", "signature verify apk", R.drawable.ic_check) { showBuildIntegrity() })
+            add(Command("Verify provenance", "Check a capture's provenance record", "attest evidence chain", R.drawable.ic_check) { pickProvenance() })
+            add(Command("Help", "What Mobet is, and what it refuses to do", "about guide docs", R.drawable.ic_help) { showHelp() })
+            if (!serviceReady) {
+                add(0, Command("Enable automation service", "Required before anything can run", "accessibility permission setup", R.drawable.ic_accessibility) { openAccessibilitySettings() })
+            }
+        }
+        CommandPalette.show(this, commands)
+    }
+
+    /**
+     * Ctrl+K opens the palette, matching the convention of every editor this app's users already
+     * use, and giving hardware-keyboard and switch-access users a single entry point to
+     * everything.
+     */
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (keyCode == android.view.KeyEvent.KEYCODE_K && event?.isCtrlPressed == true) {
+            showCommandPalette()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     // ── Motion ───────────────────────────────────────────────────────────────
@@ -425,11 +494,41 @@ class MainActivity : AppCompatActivity(), GenerationHost {
         }
     }
 
+    private fun openAccessibilitySettings() {
+        runCatching { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+            .onFailure { showStatus("Could not open Accessibility settings", Tone.DANGER) }
+    }
+
+    /**
+     * Caps the content column on large screens.
+     *
+     * A single adaptive layout is preferred to a `layout-sw600dp` copy of this 700-line file:
+     * a forked layout drifts from the original the first time either is edited, and every view id
+     * here is wired by name in Kotlin. Capping the column keeps line lengths readable on tablets
+     * and unfolded foldables without duplicating anything.
+     */
+    private fun applyAdaptiveWidth() {
+        val maxWidth = resources.getDimensionPixelSize(R.dimen.mobet_content_max_width)
+        if (maxWidth <= 0) return
+        val column = findViewById<View>(R.id.contentColumn)
+        column.viewTreeObserver.addOnGlobalLayoutListener(object :
+            android.view.ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                column.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                val parentWidth = (column.parent as? View)?.width ?: return
+                if (parentWidth > maxWidth) {
+                    column.layoutParams = (column.layoutParams as FrameLayout.LayoutParams).apply {
+                        width = maxWidth
+                        gravity = android.view.Gravity.CENTER_HORIZONTAL
+                    }
+                    column.requestLayout()
+                }
+            }
+        })
+    }
+
     private fun wireActions() {
-        findViewById<View>(R.id.openAccessibility).setOnClickListener {
-            runCatching { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-                .onFailure { showStatus("Could not open Accessibility settings", Tone.DANGER) }
-        }
+        findViewById<View>(R.id.openAccessibility).setOnClickListener { openAccessibilitySettings() }
         findViewById<View>(R.id.restrictedHelp).setOnClickListener { showRestrictedSettingsHelp() }
         findViewById<View>(R.id.formatJson).setOnClickListener { formatWorkflowJson() }
         findViewById<View>(R.id.expandEditor).setOnClickListener { showEditorFullScreen() }
@@ -555,14 +654,41 @@ class MainActivity : AppCompatActivity(), GenerationHost {
         }
     }
 
+    /**
+     * Summary chips. Informational chips stay compact, but an *interactive* chip is a control and
+     * gets the 48dp minimum touch target Android requires, a hint that it can be tapped, and an
+     * accessibility action label so screen readers announce it as more than a status word.
+     */
     private fun addChip(label: String, tone: Tone, icon: Int? = null, onClick: (() -> Unit)? = null) {
+        val interactive = onClick != null
         val chip = Chip(this).apply {
             text = label
-            isClickable = onClick != null
+            isClickable = interactive
+            isFocusable = interactive
             isCheckable = false
             if (onClick != null) setOnClickListener { onClick() }
-            chipMinHeight = dp(28).toFloat()
-            setEnsureMinTouchTargetSize(false)
+            chipMinHeight = dp(if (interactive) 32 else 28).toFloat()
+            // Material expands the *touchable* area to 48dp without growing the chip visually.
+            setEnsureMinTouchTargetSize(interactive)
+            if (interactive) {
+                contentDescription = "$label. Double tap for details."
+                ViewCompat.setAccessibilityDelegate(this, object : AccessibilityDelegateCompat() {
+                    override fun onInitializeAccessibilityNodeInfo(
+                        host: View,
+                        info: AccessibilityNodeInfoCompat
+                    ) {
+                        super.onInitializeAccessibilityNodeInfo(host, info)
+                        info.addAction(
+                            AccessibilityNodeInfoCompat.AccessibilityActionCompat(
+                                AccessibilityNodeInfoCompat.ACTION_CLICK,
+                                getString(R.string.action_show_details)
+                            )
+                        )
+                    }
+                })
+            } else {
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            }
             textSize = 11f
             val color = when (tone) {
                 Tone.SUCCESS -> ContextCompat.getColor(this@MainActivity, R.color.mobet_success)
@@ -1949,6 +2075,45 @@ class MainActivity : AppCompatActivity(), GenerationHost {
         findViewById<View>(R.id.openAccessibility).visibility = setupVisibility
         findViewById<View>(R.id.restrictedHelp).visibility = setupVisibility
         findViewById<View>(R.id.runWorkflow).isEnabled = enabled
+        refreshOnboarding(enabled)
+    }
+
+    /**
+     * Three concrete first-run steps, each ticking itself off as its condition is met.
+     *
+     * A new install lands on a JSON editor and fourteen buttons, which says nothing about where to
+     * begin. The card states the order, then removes itself permanently once all three steps are
+     * satisfied (or the user dismisses it) — onboarding that expires instead of accumulating.
+     */
+    private fun refreshOnboarding(serviceEnabled: Boolean) {
+        val preferences = getSharedPreferences("onboarding", MODE_PRIVATE)
+        if (preferences.getBoolean("done", false)) {
+            onboardingCard.visibility = View.GONE
+            return
+        }
+        val snapshot = MobetAccessibilityService.instance?.latestSnapshot()
+        val sawTarget = preferences.getBoolean("saw_target", false) ||
+            (snapshot != null && snapshot.packageName != packageName && snapshot.elements.isNotEmpty())
+        if (sawTarget) preferences.edit().putBoolean("saw_target", true).apply()
+        val hasPlan = runCatching { Workflow.parse(currentSource()).steps.isNotEmpty() }.getOrDefault(false)
+
+        if (serviceEnabled && sawTarget && hasPlan) {
+            preferences.edit().putBoolean("done", true).apply()
+            onboardingCard.visibility = View.GONE
+            return
+        }
+        onboardingCard.visibility = View.VISIBLE
+        stepText(onboardingStepOne, 1, R.string.onboarding_step_service, serviceEnabled)
+        stepText(onboardingStepTwo, 2, R.string.onboarding_step_target, sawTarget)
+        stepText(onboardingStepThree, 3, R.string.onboarding_step_plan, hasPlan)
+    }
+
+    private fun stepText(view: TextView, number: Int, textRes: Int, done: Boolean) {
+        val label = getString(textRes)
+        view.text = if (done) "✓  $label" else "$number ·  $label"
+        view.alpha = if (done) 0.55f else 1f
+        // Sighted users read the tick; a screen reader needs the state spoken.
+        view.contentDescription = if (done) "Step $number complete: $label" else "Step $number: $label"
     }
 
     private fun isServiceEnabled(): Boolean {
@@ -2054,7 +2219,7 @@ class MainActivity : AppCompatActivity(), GenerationHost {
      * and no version history, a mis-tap meant retyping it. The caller supplies a restore
      * closure; the snackbar keeps it alive for the duration of the bar.
      */
-    private fun reportUndoable(message: String, undo: () -> Unit) {
+    override fun reportUndoable(message: String, undo: () -> Unit) {
         appendLog(message)
         MobetUi.snack(this, message, Tone.SUCCESS, getString(R.string.action_undo)) {
             undo()

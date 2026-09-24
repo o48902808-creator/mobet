@@ -36,6 +36,9 @@ interface GenerationHost {
     /** Replaces the editor contents; only ever called from an explicit user action. */
     fun replaceSource(json: String)
 
+    /** Reports a completed change with an Undo affordance, restoring on request. */
+    fun reportUndoable(message: String, undo: () -> Unit)
+
     fun status(message: String, tone: Tone = Tone.NEUTRAL)
 
     /** Opens the existing reminder scheduler for a saved library entry. */
@@ -146,9 +149,22 @@ class GenerationController(private val host: GenerationHost) {
             .show()
     }
 
+    /**
+     * Inserting replaces whatever the user had written, so the replaced document is captured and
+     * offered back. A destructive action with no way back is the one thing an authoring tool
+     * cannot ask a person to accept on faith — the report's diff explains the change, and Undo
+     * makes accepting it reversible.
+     */
     private fun insertPlan(result: SynthesizedWorkflow) {
+        val replaced = host.currentSource()
         host.replaceSource(result.json)
-        host.status("Plan inserted and policy-validated — review before running", Tone.SUCCESS)
+        if (replaced.isBlank()) {
+            host.status("Plan inserted and policy-validated — review before running", Tone.SUCCESS)
+        } else {
+            host.reportUndoable("Plan inserted — the previous document was replaced") {
+                host.replaceSource(replaced)
+            }
+        }
     }
 
     /**

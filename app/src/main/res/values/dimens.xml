@@ -11,4 +11,7 @@
     <dimen name="mobet_touch_target">48dp</dimen>
     <dimen name="mobet_tile_height">78dp</dimen>
     <dimen name="mobet_editor_min_height">220dp</dimen>
+    <!-- 0dp means "fill the window". Overridden on large screens so text does not stretch into
+         unreadably long lines; see values-sw600dp. -->
+    <dimen name="mobet_content_max_width">0dp</dimen>
 </resources>

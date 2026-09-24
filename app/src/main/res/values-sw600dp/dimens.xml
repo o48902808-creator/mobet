@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Tablets and unfolded foldables. The content column is capped rather than stretched: a
+        900dp-wide line of JSON or report text is measurably harder to read than a 640dp one, and
+        a two-pane split would fork this screen's layout into a second file that drifts.
+    -->
+    <dimen name="mobet_content_max_width">640dp</dimen>
+    <dimen name="mobet_screen_padding">24dp</dimen>
+    <dimen name="mobet_editor_min_height">320dp</dimen>
+</resources>
