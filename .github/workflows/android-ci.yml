@@ -298,6 +298,8 @@ jobs:
       - name: Install Appium and UiAutomator2 driver
         run: |
           npm install --global appium@3
+          echo "NODE_BIN=$(command -v node)" >> "$GITHUB_ENV"
+          echo "PYTHON_BIN=$(command -v python3)" >> "$GITHUB_ENV"
           echo "APPIUM_BIN=$(command -v appium)" >> "$GITHUB_ENV"
           appium driver install uiautomator2
 
@@ -319,12 +321,13 @@ jobs:
           script: |
             set -eux
             mkdir -p headless-test-results
-            trap 'status=$?; printf "status=%s\\nAPPIUM_BIN=%s\\nPATH=%s\\n" "$status" "${APPIUM_BIN:-}" "$PATH" > headless-test-results/diagnostics.txt; test -z "${APPIUM_PID:-}" || kill "$APPIUM_PID" || true; exit "$status"' EXIT
-            test -n "${APPIUM_BIN:-}"
+            trap 'status=$?; printf "status=%s\\nNODE_BIN=%s\\nPYTHON_BIN=%s\\nAPPIUM_BIN=%s\\nPATH=%s\\n" "$status" "${NODE_BIN:-}" "${PYTHON_BIN:-}" "${APPIUM_BIN:-}" "$PATH" > headless-test-results/diagnostics.txt; test -z "${APPIUM_PID:-}" || kill "$APPIUM_PID" || true; exit "$status"' EXIT
+            test -x "$NODE_BIN"
+            test -x "$PYTHON_BIN"
             test -x "$APPIUM_BIN"
-            "$APPIUM_BIN" --address 127.0.0.1 --port 4723 > /tmp/appium.log 2>&1 &
+            "$NODE_BIN" "$APPIUM_BIN" --address 127.0.0.1 --port 4723 > /tmp/appium.log 2>&1 &
             APPIUM_PID=$!
-            python3 - <<'PY'
+            "$PYTHON_BIN" - <<'PY'
             import time
             import urllib.request
             deadline = time.time() + 60
@@ -337,7 +340,7 @@ jobs:
             else:
                 raise SystemExit('Appium did not become ready')
             PY
-            python3 scripts/mobet-runner.py \
+            "$PYTHON_BIN" scripts/mobet-runner.py \
               app/src/main/assets/sample_workflow.json \
               --server-url http://127.0.0.1:4723 \
               --junit-xml headless-test-results/mobet.xml \
