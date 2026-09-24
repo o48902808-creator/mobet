@@ -297,7 +297,7 @@ jobs:
 
       - name: Install Appium and UiAutomator2 driver
         run: |
-          npm install --global appium@2
+          npm install --global appium@3
           appium driver install uiautomator2
 
       - name: Enable KVM
