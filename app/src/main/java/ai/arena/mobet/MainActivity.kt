@@ -22,6 +22,7 @@ import ai.arena.mobet.security.SecretStore
 import ai.arena.mobet.synthesis.AgentCrystallizer
 import ai.arena.mobet.synthesis.PlanDiff
 import ai.arena.mobet.synthesis.PlanQuality
+import ai.arena.mobet.synthesis.QualitySeverity
 import ai.arena.mobet.synthesis.SynthesizedWorkflow
 import ai.arena.mobet.synthesis.TraceSynthesizer
 import ai.arena.mobet.synthesis.WorkflowRecipes
@@ -527,6 +528,16 @@ class MainActivity : AppCompatActivity() {
         addChip("${summary.runtimeSeconds}s budget", Tone.NEUTRAL)
         if (summary.visualFallbacks) addChip("Visual fallback", Tone.WARNING)
         if (summary.selfHealing) addChip("Self-healing", Tone.NEUTRAL)
+        summary.quality?.let { quality ->
+            // The robustness grade belongs where authoring happens: "no step verifies its result"
+            // is most useful while the plan is being written, not after it fails.
+            val tone = when {
+                quality.score >= 75 -> Tone.SUCCESS
+                quality.score >= 50 -> Tone.NEUTRAL
+                else -> Tone.WARNING
+            }
+            addChip("Quality ${quality.grade} · ${quality.score}", tone) { showQualityReport(quality) }
+        }
         val violations = summary.violations
         if (violations.isEmpty()) {
             addChip("Policy OK", Tone.SUCCESS, R.drawable.ic_check)
@@ -538,6 +549,33 @@ class MainActivity : AppCompatActivity() {
                 Tone.DANGER, R.drawable.ic_warning
             ) { validatePlan() }
         }
+    }
+
+    /** Advisory robustness findings; never a gate, so the sheet offers no "fix" action. */
+    private fun showQualityReport(quality: PlanQuality) {
+        val sheet = MobetUi.ReportSheet(this)
+            .title("Plan robustness", R.drawable.ic_policy)
+            .subtitle("Advisory only — policy validation is separate and authoritative")
+            .monospace("Grade       ${quality.grade} (${quality.score}/100)")
+        if (quality.findings.isEmpty()) {
+            sheet.paragraph("No robustness concerns found in this plan.")
+        } else {
+            sheet.rows(
+                quality.findings.map { finding ->
+                    Row(
+                        title = finding.message,
+                        subtitle = finding.step?.let { "Step $it" } ?: "Plan level",
+                        icon = when (finding.severity) {
+                            QualitySeverity.WARNING -> R.drawable.ic_warning
+                            QualitySeverity.ADVICE -> R.drawable.ic_policy
+                            QualitySeverity.INFO -> R.drawable.ic_check
+                        },
+                        showChevron = false
+                    )
+                }
+            )
+        }
+        sheet.action(getString(R.string.action_close)).show()
     }
 
     private fun addChip(label: String, tone: Tone, icon: Int? = null, onClick: (() -> Unit)? = null) {
@@ -1507,10 +1545,49 @@ class MainActivity : AppCompatActivity() {
             .subtitle("${result.stepCount} steps · policy-validated · nothing has run")
             .monospace(result.report() + (diff?.let { "\n" + it.render() } ?: ""))
             .action(getString(R.string.action_close))
-            .action("Insert", primary = true) {
-                editor.setText(result.json)
-                showStatus("Plan inserted and policy-validated — review before running", Tone.SUCCESS)
+            // A generated plan used to dead-end in the editor. Saving it names it, puts it in the
+            // library (the unit every export bundle and reminder is addressed by), and makes the
+            // usual export/schedule paths available without retyping anything.
+            .action("Save & schedule") { insertPlan(result); saveGeneratedPlan(result) }
+            .action("Insert", primary = true) { insertPlan(result) }
+            .show()
+    }
+
+    private fun insertPlan(result: SynthesizedWorkflow) {
+        editor.setText(result.json)
+        showStatus("Plan inserted and policy-validated — review before running", Tone.SUCCESS)
+    }
+
+    /**
+     * Names the generated plan, stores it in the library, and offers to schedule a reminder.
+     *
+     * Scheduling stays a *reminder*: Mobet prompts at the chosen time, it never starts a run on
+     * its own. Library entries are what `WorkflowTransfer` exports as signed v2 bundles, so this
+     * is also the on-ramp to sharing a generated plan.
+     */
+    private fun saveGeneratedPlan(result: SynthesizedWorkflow) {
+        val suggested = result.workflow.name.take(60)
+        val input = MobetUi.Field(this, "Workflow name", "Saved to the library and exportable as a bundle")
+        input.input.setText(suggested)
+        MobetUi.dialog(this)
+            .setTitle("Save generated plan")
+            .setIcon(R.drawable.ic_save)
+            .setView(MobetUi.formContainer(this, input.layout))
+            .setPositiveButton(R.string.action_save) { _, _ ->
+                val name = input.value.ifBlank { suggested }
+                if (name.isBlank()) {
+                    showStatus("A workflow name is required", Tone.WARNING)
+                    return@setPositiveButton
+                }
+                getSharedPreferences("library", MODE_PRIVATE).edit().putString(name, result.json).apply()
+                MobetUi.snack(
+                    this,
+                    "Saved “$name” — exportable as a bundle",
+                    Tone.SUCCESS,
+                    "Schedule"
+                ) { scheduleReminder(name) }
             }
+            .setNegativeButton(R.string.action_cancel, null)
             .show()
     }
 

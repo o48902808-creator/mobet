@@ -748,6 +748,8 @@ class WorkflowRunner(
     }
 
     private fun finish(message: String) {
+        // Persist what this run learned about selector reliability, once, at the end.
+        SelectorOutcomes.flush()
         cancelled = true
         awaitingConfirmation = false
         handler.removeCallbacksAndMessages(null)

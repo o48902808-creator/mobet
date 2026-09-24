@@ -16,10 +16,16 @@ class SelectorOutcomesTest {
     private val flaky = SelectorSpec("text", "Next")
 
     @Before
-    fun reset() = SelectorOutcomes.clear()
+    fun reset() {
+        SelectorOutcomes.detach()
+        SelectorOutcomes.clear()
+    }
 
     @After
-    fun cleanUp() = SelectorOutcomes.clear()
+    fun cleanUp() {
+        SelectorOutcomes.detach()
+        SelectorOutcomes.clear()
+    }
 
     @Test
     fun historyNeedsAMinimumOfObservations() {
@@ -94,5 +100,59 @@ class SelectorOutcomesTest {
             "tap \"Next\"", snapshot, SynthesisOptions(priors = NoGroundingPriors)
         ).getOrThrow()
         assertTrue(result.notes.none { it.detail.contains("learned prior") })
+    }
+
+    // ── Persistence and decay ────────────────────────────────────────────────
+
+    private class MemoryJournal(var payload: String? = null) : SelectorOutcomes.OutcomeJournal {
+        var saves = 0
+        override fun load(): String? = payload
+        override fun save(value: String) {
+            payload = value
+            saves += 1
+        }
+    }
+
+    @Test
+    fun tallesSurviveAProcessRestart() {
+        val journal = MemoryJournal()
+        SelectorOutcomes.attach(journal)
+        repeat(4) { SelectorOutcomes.recordSuccess(pkg, reliable) }
+        SelectorOutcomes.flush()
+        assertTrue(journal.saves > 0)
+
+        // Simulate a cold start: same journal contents, empty memory.
+        SelectorOutcomes.clear()
+        SelectorOutcomes.attach(journal)
+        assertTrue(SelectorOutcomes.adjustment(pkg, reliable) > 0.0)
+    }
+
+    @Test
+    fun flushIsANoOpWithoutChanges() {
+        val journal = MemoryJournal()
+        SelectorOutcomes.attach(journal)
+        SelectorOutcomes.flush()
+        assertEquals(0, journal.saves)
+    }
+
+    @Test
+    fun agedEvidenceDecaysAndIsEventuallyForgotten() {
+        val fourMonthsAgo = System.currentTimeMillis() - (120L * 24 * 60 * 60 * 1000)
+        val stale = """[{"k":"$pkg|${reliable}","s":8.0,"f":0.0,"at":$fourMonthsAgo}]"""
+        SelectorOutcomes.attach(MemoryJournal(stale))
+        val decayed = SelectorOutcomes.outcomeOf(pkg, reliable)
+        // Four months is four half-lives: 8 observations are worth about half of one.
+        assertTrue(decayed == null || decayed.total < 1.0)
+
+        val ancient = System.currentTimeMillis() - (3_000L * 24 * 60 * 60 * 1000)
+        SelectorOutcomes.clear()
+        SelectorOutcomes.attach(MemoryJournal("""[{"k":"$pkg|${reliable}","s":8.0,"f":0.0,"at":$ancient}]"""))
+        assertEquals(null, SelectorOutcomes.outcomeOf(pkg, reliable))
+    }
+
+    @Test
+    fun corruptStorageIsIgnoredRatherThanFatal() {
+        SelectorOutcomes.attach(MemoryJournal("not json at all"))
+        assertEquals(0.0, SelectorOutcomes.adjustment(pkg, reliable), 1e-9)
     }
 }

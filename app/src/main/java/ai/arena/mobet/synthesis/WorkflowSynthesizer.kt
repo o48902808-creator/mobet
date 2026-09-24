@@ -25,6 +25,11 @@ data class SynthesisOptions(
     val maxSteps: Int = 80,
     /** Execution history consulted as a bounded ranking tie-break; [NoGroundingPriors] ignores it. */
     val priors: GroundingPriors = SelectorOutcomes,
+    /**
+     * Screens observed earlier in the session, so a multi-screen route can be planned from the
+     * first screen. [ScreenMemory.EMPTY] restricts grounding to the current screen only.
+     */
+    val screenMemory: ScreenMemory = SessionScreenMemory,
     /** Optional explicit workflow name; otherwise derived from the goal text. */
     val name: String? = null
 )
@@ -80,7 +85,8 @@ object WorkflowSynthesizer {
             notes = lowering.notes,
             maxSteps = options.maxSteps,
             optimize = options.optimize,
-            parameterizeValues = options.parameterizeValues
+            parameterizeValues = options.parameterizeValues,
+            snapshot = snapshot
         ).getOrThrow()
     }
 
@@ -92,6 +98,8 @@ object WorkflowSynthesizer {
         val steps = mutableListOf<JSONObject>()
         val notes = mutableListOf<SynthesisNote>()
         val launchPackages = mutableSetOf<String>()
+        /** Selectors that came from a remembered screen rather than the live one. */
+        private val rememberedFor = mutableMapOf<String, RememberedScreen>()
         private var labelSeq = 0
 
         fun emit(intent: Intent) {
@@ -135,7 +143,9 @@ object WorkflowSynthesizer {
                 is Grounding.Resolved -> {
                     val candidate = grounding.best
                     note(intent.source, candidate)
-                    if (options.insertWaits) emitWaitFor(candidate.selector)
+                    // A memory-grounded target is not on screen *now*, so its wait is mandatory:
+                    // it is the check that turns an optimistic route into a verified one.
+                    if (options.insertWaits || fromMemory(candidate)) emitWaitFor(candidate.selector)
                     val tap = step("tap").withSelector(candidate.selector)
                         .put("timeoutMs", options.defaultTimeoutMs)
                         .put("retries", options.defaultRetries)
@@ -174,7 +184,7 @@ object WorkflowSynthesizer {
 
         private fun emitFill(intent: FillIntent) {
             val candidate = resolve(intent.target, intent.source, editableOnly = true)
-            if (options.insertWaits) emitWaitFor(candidate.selector)
+            if (options.insertWaits || fromMemory(candidate)) emitWaitFor(candidate.selector)
             steps += step("fill").withSelector(candidate.selector)
                 .put("value", intent.value)
                 .put("timeoutMs", options.defaultTimeoutMs)
@@ -279,15 +289,50 @@ object WorkflowSynthesizer {
             }
         }
 
-        private fun ground(target: String, editableOnly: Boolean): Grounding = SnapshotGrounder.ground(
-            target = target,
-            elements = snapshot.elements,
-            editableOnly = editableOnly,
-            packageName = snapshot.packageName,
-            priors = options.priors
-        )
+        /**
+         * Grounds against the current screen, falling back to screens seen earlier in the session.
+         *
+         * Memory grounding is strictly more conservative than live grounding: only an unambiguous
+         * resolution counts (no alternates), and the emitted step is always preceded by a `wait`,
+         * so a route that no longer holds fails as a named timeout instead of tapping blind. The
+         * fallback is recorded in [rememberedFor] and reported to the user.
+         */
+        private fun ground(target: String, editableOnly: Boolean): Grounding {
+            val live = SnapshotGrounder.ground(
+                target = target,
+                elements = snapshot.elements,
+                editableOnly = editableOnly,
+                packageName = snapshot.packageName,
+                priors = options.priors
+            )
+            if (live !is Grounding.NotFound) return live
+            options.screenMemory.screens(snapshot.packageName).forEach { screen ->
+                if (SessionScreenMemory.identify(snapshot.elements) == screen.screenId) return@forEach
+                val remembered = SnapshotGrounder.ground(
+                    target = target,
+                    elements = screen.elements,
+                    editableOnly = editableOnly,
+                    packageName = snapshot.packageName,
+                    priors = options.priors
+                )
+                if (remembered is Grounding.Resolved) {
+                    rememberedFor[remembered.best.selector.toString()] = screen
+                    return remembered
+                }
+            }
+            return live
+        }
 
         private fun note(source: String, candidate: GroundedCandidate) {
+            rememberedFor[candidate.selector.toString()]?.let { screen ->
+                val ageMinutes = ((System.currentTimeMillis() - screen.observedAt) / 60_000).coerceAtLeast(0)
+                notes += SynthesisNote(
+                    "grounding",
+                    "“${source.take(60)}” → ${candidate.selector} grounded from a screen seen " +
+                        "${ageMinutes}m ago, not the current one — the preceding wait verifies it at run time"
+                )
+                return
+            }
             notes += SynthesisNote(
                 "grounding",
                 "“${source.take(60)}” → ${candidate.selector} (${candidate.label}, " +
@@ -295,6 +340,9 @@ object WorkflowSynthesizer {
                     (if (candidate.prior != 0.0) ", learned prior ${"%+.2f".format(candidate.prior)}" else "") + ")"
             )
         }
+
+        private fun fromMemory(candidate: GroundedCandidate): Boolean =
+            rememberedFor.containsKey(candidate.selector.toString())
 
         private fun ambiguityMessage(target: String, candidates: List<GroundedCandidate>): String =
             "“$target” is ambiguous on this screen — ${candidates.joinToString { it.label }}. " +
@@ -304,7 +352,11 @@ object WorkflowSynthesizer {
             val hint = best?.let {
                 " Closest visible control: “${it.label}” (${(it.similarity * 100).toInt()}% match)."
             }.orEmpty()
-            return "“$target” from clause “$source” is not on the captured screen.$hint"
+            val remembered = options.screenMemory.screens(snapshot.packageName).size
+            val memoryNote = if (remembered > 0) {
+                " $remembered remembered screen(s) of this app were also searched."
+            } else ""
+            return "“$target” from clause “$source” is not on the captured screen.$hint$memoryNote"
         }
 
         private fun step(action: String): JSONObject = JSONObject().put("action", action)

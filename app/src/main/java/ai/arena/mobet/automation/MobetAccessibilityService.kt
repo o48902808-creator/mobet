@@ -24,6 +24,8 @@ class MobetAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
+        // Bind the selector-outcome tally to encrypted storage before any run can record into it.
+        ai.arena.mobet.synthesis.EncryptedOutcomeJournal.attachOnce(this)
         emit("Accessibility service connected")
     }
 
@@ -50,7 +52,10 @@ class MobetAccessibilityService : AccessibilityService() {
 
         if (eventPackage != packageName && now - lastInspectionAt >= 700) {
             rootInActiveWindow?.let { root ->
-                try { snapshot = ScreenInspector.inspect(root, eventPackage) }
+                try {
+                    snapshot = ScreenInspector.inspect(root, eventPackage)
+                        .also(ai.arena.mobet.synthesis.SessionScreenMemory::remember)
+                }
                 finally { root.recycle() }
                 lastInspectionAt = now
             }
@@ -295,7 +300,14 @@ class MobetAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return snapshot
         return try {
             val pkg = root.packageName?.toString() ?: return snapshot
-            ScreenInspector.inspect(root, pkg).also { if (pkg != packageName) snapshot = it }
+            ScreenInspector.inspect(root, pkg).also {
+                if (pkg != packageName) {
+                    snapshot = it
+                    // Screens observed during a run feed the session graph too, so a later goal
+                    // can be planned across the route this run just walked.
+                    ai.arena.mobet.synthesis.SessionScreenMemory.remember(it)
+                }
+            }
         } finally { root.recycle() }
     }
 

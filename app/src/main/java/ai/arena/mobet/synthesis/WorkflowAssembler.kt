@@ -1,6 +1,8 @@
 package ai.arena.mobet.synthesis
 
+import ai.arena.mobet.automation.ScreenSnapshot
 import ai.arena.mobet.automation.Workflow
+import ai.arena.mobet.planner.PlanSimulator
 import ai.arena.mobet.policy.AutomationPolicy
 import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.policy.RiskEngine
@@ -19,7 +21,14 @@ data class SynthesizedWorkflow(
     val workflow: Workflow,
     val notes: List<SynthesisNote>,
     /** Advisory robustness measurement; never a gate — [PlanValidator] already decided legality. */
-    val quality: PlanQuality
+    val quality: PlanQuality,
+    /**
+     * Counterfactual dry-run report, when a snapshot was available to simulate against.
+     *
+     * Simulating at generation time answers "will step 4 time out?" *before* the plan is
+     * inserted, instead of after a failed run.
+     */
+    val simulation: String? = null
 ) {
     val stepCount: Int get() = workflow.steps.size
 
@@ -40,6 +49,10 @@ data class SynthesizedWorkflow(
         appendLine()
         appendLine("Synthesis decisions")
         notes.forEach { appendLine("  • ${it.stage}: ${it.detail}") }
+        simulation?.let {
+            appendLine()
+            append(it)
+        }
     }
 }
 
@@ -66,7 +79,9 @@ internal object WorkflowAssembler {
         notes: List<SynthesisNote> = emptyList(),
         maxSteps: Int = 80,
         optimize: Boolean = true,
-        parameterizeValues: Boolean = false
+        parameterizeValues: Boolean = false,
+        /** Simulated against this snapshot when present; simulation has no device effects. */
+        snapshot: ScreenSnapshot? = null
     ): Result<SynthesizedWorkflow> = runCatching {
         require(steps.isNotEmpty()) { "Synthesis produced no steps" }
         require(steps.size <= maxSteps) { "Synthesis produced ${steps.size} steps; the limit is $maxSteps" }
@@ -127,7 +142,8 @@ internal object WorkflowAssembler {
                 (violation.step?.let { "step $it: " } ?: "") + violation.message
             }
         }
-        SynthesizedWorkflow(formatted, workflow, trail, PlanQuality.analyze(workflow))
+        val simulation = snapshot?.let { runCatching { PlanSimulator.simulate(workflow, it) }.getOrNull() }
+        SynthesizedWorkflow(formatted, workflow, trail, PlanQuality.analyze(workflow), simulation)
     }
 
     /**

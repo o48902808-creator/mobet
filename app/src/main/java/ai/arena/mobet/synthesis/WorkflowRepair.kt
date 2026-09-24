@@ -125,7 +125,8 @@ object WorkflowRepair {
             // repair never widens the allowlist.
             extraPackages = extraPackages.filter { it != target }.toSet(),
             notes = notes,
-            maxSteps = options.maxSteps
+            maxSteps = options.maxSteps,
+            snapshot = snapshot
         ).getOrThrow()
     }
 }

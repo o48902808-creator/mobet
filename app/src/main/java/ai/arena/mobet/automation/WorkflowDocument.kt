@@ -2,6 +2,7 @@ package ai.arena.mobet.automation
 
 import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.policy.PolicyViolation
+import ai.arena.mobet.synthesis.PlanQuality
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -25,6 +26,11 @@ object WorkflowDocument {
         val visualFallbacks: Boolean,
         val selfHealing: Boolean,
         val violations: List<PolicyViolation>,
+        /**
+         * Advisory robustness read-out for the *authored* document, so the grade is visible where
+         * authoring happens rather than only in a generation report. Null when parsing failed.
+         */
+        val quality: PlanQuality? = null,
         val parseError: String? = null
     ) {
         val isValid: Boolean get() = parseError == null && violations.isEmpty()
@@ -52,7 +58,8 @@ object WorkflowDocument {
             runtimeSeconds = workflow.policy.maxRuntimeMs / 1_000,
             visualFallbacks = workflow.policy.allowVisualFallbacks,
             selfHealing = workflow.policy.allowSelfHealing,
-            violations = runCatching { PlanValidator.validate(workflow) }.getOrDefault(emptyList())
+            violations = runCatching { PlanValidator.validate(workflow) }.getOrDefault(emptyList()),
+            quality = runCatching { PlanQuality.analyze(workflow) }.getOrNull()
         )
     }
 
