@@ -1,15 +1,43 @@
 name: Release APK
 
-# Manual dispatch (optionally also fires on v* tag pushes) builds the APK and
-# publishes it as a GitHub Release asset named mobet.apk, so the stable URL
+# Manual dispatch (optionally also fires on v* tag pushes) builds a PRODUCTION-SIGNED
+# release APK and publishes it as a GitHub Release asset named mobet.apk, so the stable URL
 # https://github.com/o48902808-creator/mobet/releases/latest/download/mobet.apk
 # always points at the newest release's APK.
+#
+# THREE JOBS, THREE DISJOINT PRIVILEGE SETS. This repository is public and its stated posture
+# is that a compromised dependency cannot mutate releases, so no job holds more than one kind
+# of power:
+#
+#   build    runs project code (Gradle, AGP, 9 third-party deps) -> NO secrets, NO write token.
+#            Produces an UNSIGNED APK. A malicious dependency executing here has nothing to
+#            steal and nothing to publish.
+#   sign     holds the signing key -> runs NO project build code. Only apksigner/zipalign from
+#            the Android SDK plus this repository's stdlib-only Python scripts. Gated on the
+#            `release` environment so the key is released only under its protection rules.
+#   publish  holds contents: write -> NO secrets, NO project code. Turns already-verified
+#            artifacts into a GitHub Release.
+#
+# Signing material comes exclusively from secrets on the `release` environment
+# (see docs/RELEASE_SIGNING.md):
+#   MOBET_KEYSTORE_BASE64    base64 of the PKCS#12 keystore
+#   MOBET_KEYSTORE_PASSWORD  keystore password
+#   MOBET_KEY_ALIAS          key alias inside the keystore
+#   MOBET_KEY_PASSWORD       private-key password
+# Strongly recommended pin:
+#   MOBET_SIGNING_CERT_SHA256  expected signer certificate SHA-256 (colonless hex). When set,
+#                              the release fails if the APK is signed by any other certificate.
+#
+# There is no debug-signing fallback anywhere: the build job cannot sign at all, and the sign
+# job's output is independently re-verified with apksigner, which rejects unsigned APKs and the
+# Android debug certificate.
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.6.0)"
+        description: "Tag to release (e.g. v1.0.0)"
         required: true
+        default: "v1.0.0"
       title:
         description: "Release title (defaults to the tag)"
         required: false
@@ -18,21 +46,15 @@ on:
     tags:
       - "v*"
 
-# Zero-write CI posture, same as android-ci.yml: the build job receives no
-# repository write token, so a compromised dependency cannot mutate releases.
-# Only the publish job may write, and it executes no project code — it just
-# turns the already-built artifact into a release.
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build mobet.apk
+    name: Build unsigned APK
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -49,9 +71,12 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      - name: Test release gates
+        run: python3 scripts/test_release_gates.py
+
       # Generate the payload before compilation so the app can verify and display it offline.
-      # The workflow still adds the final whole-APK digest to the external sidecar after build:
-      # embedding that value in the APK itself would change the digest recursively.
+      # The workflow still adds the final whole-APK digest to the external sidecar after
+      # signing: embedding that value in the APK itself would change the digest recursively.
       - name: Generate embedded capability manifest
         env:
           ATTESTATION_REF: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifact-attestation
@@ -62,51 +87,212 @@ jobs:
             --output app/src/main/assets/mobet-capability.json \
             --version-name "$VERSION_NAME" --version-code "$VERSION_CODE" \
             --commit "$GITHUB_SHA" --workflow "$GITHUB_WORKFLOW_REF" \
-            --attestation "$ATTESTATION_REF" --build-type debug --signing debug
+            --attestation "$ATTESTATION_REF" --build-type release --signing release
 
       # The repository intentionally omits the Gradle wrapper JAR; CI pins Gradle itself.
-      - name: Run deterministic unit tests
-        run: gradle --no-daemon --warning-mode all test assembleDebug
+      # No signing material is present in this job, so this necessarily produces an unsigned APK.
+      - name: Run deterministic unit tests and assemble release
+        run: gradle --no-daemon --warning-mode all test assembleRelease
 
-      - name: Stage as mobet.apk
+      - name: Stage unsigned APK
         run: |
-          mv app/build/outputs/apk/debug/app-debug.apk mobet.apk
-          test -s mobet.apk
-          sha256sum mobet.apk | tee mobet.apk.sha256
+          set -euo pipefail
+          UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
+          test -s "$UNSIGNED"
+          cp "$UNSIGNED" mobet-unsigned.apk
+          sha256sum mobet-unsigned.apk | tee mobet-unsigned.apk.sha256
           cp app/src/main/assets/mobet-capability.json mobet-capability.json
-          python3 - <<'PYTHON'
-          import hashlib, json
-          path = "mobet-capability.json"
-          manifest = json.load(open(path))
-          digest = hashlib.sha256(open("mobet.apk", "rb").read()).hexdigest()
-          manifest["artifact"] = "mobet.apk"
-          manifest["sha256"] = digest
-          json.dump(manifest, open(path, "w"), indent=2)
-          open(path, "a").write("\n")
-          PYTHON
+
+      # Unsigned artifacts are byte-comparable by anyone, which is what makes this number
+      # meaningful to a third party: they can run the same build and match it without holding
+      # the signing key. The content digest additionally survives signing, so the published
+      # signed APK can be tied back to this rebuild.
+      - name: Rebuild independently and report reproducibility
+        run: |
+          set -euo pipefail
+          gradle --no-daemon clean assembleRelease
+          SECOND=app/build/outputs/apk/release/app-release-unsigned.apk
+          test -s "$SECOND"
+          python3 scripts/apk-content-digest.py --report mobet-reproducibility.json \
+            --first mobet-unsigned.apk --second "$SECOND"
+          cat mobet-reproducibility.json
 
       - name: Generate privacy-preserving evidence bundle
         run: |
           python3 scripts/build-evidence-bundle.py \
-            --apk mobet.apk --capability mobet-capability.json \
+            --apk mobet-unsigned.apk --capability mobet-capability.json \
             --tests app/build/test-results --output mobet-evidence.zip
           sha256sum mobet-evidence.zip > mobet-evidence.zip.sha256
 
-      - name: Rebuild independently and report reproducibility
+      - name: Upload unsigned build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobet-unsigned
+          path: |
+            mobet-unsigned.apk
+            mobet-unsigned.apk.sha256
+            mobet-capability.json
+            mobet-evidence.zip
+            mobet-evidence.zip.sha256
+            mobet-reproducibility.json
+          if-no-files-found: error
+
+  sign:
+    name: Sign and attest
+    needs: build
+    runs-on: ubuntu-latest
+    # Environment protection rules are what make the key's availability reviewable: restrict
+    # deployment branches/tags to `v*` and require a reviewer, and a branch that rewrites this
+    # workflow to exfiltrate the key cannot reach the secret without an explicit approval.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      # Only the scripts are needed — never a Gradle build. Nothing executed in this job comes
+      # from a third-party dependency.
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download unsigned build output
+        uses: actions/download-artifact@v4
+        with:
+          name: mobet-unsigned
+
+      # Fail fast, with a clear message, if the environment's secrets are absent.
+      - name: Require release signing secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MOBET_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.MOBET_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.MOBET_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.MOBET_KEY_PASSWORD }}
         run: |
-          gradle --no-daemon clean assembleDebug
-          SECOND=app/build/outputs/apk/debug/app-debug.apk
-          FIRST_SHA="$(sha256sum mobet.apk | awk '{print $1}')"
-          SECOND_SHA="$(sha256sum "$SECOND" | awk '{print $1}')"
-          STATUS=non-reproducible
-          test "$FIRST_SHA" != "$SECOND_SHA" || STATUS=reproducible
-          python3 - "$FIRST_SHA" "$SECOND_SHA" "$STATUS" <<'PYTHON'
-          import json, sys
-          json.dump({"schema":"mobet.reproducibility.v1","firstSha256":sys.argv[1],
-                     "secondSha256":sys.argv[2],"status":sys.argv[3]}, open("mobet-reproducibility.json","w"), indent=2)
-          open("mobet-reproducibility.json","a").write("\n")
+          set -euo pipefail
+          missing=()
+          [ -n "$KEYSTORE_BASE64" ]   || missing+=("MOBET_KEYSTORE_BASE64")
+          [ -n "$KEYSTORE_PASSWORD" ] || missing+=("MOBET_KEYSTORE_PASSWORD")
+          [ -n "$KEY_ALIAS" ]         || missing+=("MOBET_KEY_ALIAS")
+          [ -n "$KEY_PASSWORD" ]      || missing+=("MOBET_KEY_PASSWORD")
+          if [ ${#missing[@]} -ne 0 ]; then
+            {
+              echo "::error::Release signing secrets missing: ${missing[*]}"
+              echo "Mobet releases are production-signed. Set these on the 'release' environment"
+              echo "(Settings -> Environments -> release -> Environment secrets); see"
+              echo "docs/RELEASE_SIGNING.md. Publishing a debug-signed or unsigned APK is"
+              echo "intentionally not possible from this workflow."
+            } >&2
+            exit 1
+          fi
+          echo "All four release signing secrets are present."
+
+      # Decoded to RUNNER_TEMP, never the workspace: files under the workspace can be swept
+      # into an artifact. Mode 0600, and shredded by an always() step even on failure.
+      - name: Materialise signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MOBET_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d "$RUNNER_TEMP/signing"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/signing/mobet-release.keystore"
+          chmod 600 "$RUNNER_TEMP/signing/mobet-release.keystore"
+          test -s "$RUNNER_TEMP/signing/mobet-release.keystore"
+
+      - name: Align and sign with apksigner
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.MOBET_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.MOBET_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.MOBET_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/*/ 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -z "$BT" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;35.0.0" >/dev/null
+            BT="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)"
+          fi
+          echo "Using build-tools at $BT"
+          # zipalign before signing: AGP only aligns as part of its own signing step, which this
+          # pipeline deliberately does not use. Unaligned APKs waste RAM on-device at runtime.
+          "${BT}zipalign" -p -f 4 mobet-unsigned.apk mobet-aligned.apk
+          "${BT}zipalign" -c -v 4 mobet-aligned.apk >/dev/null
+          # Passwords via env: references so they never appear in the process table.
+          "${BT}apksigner" sign \
+            --ks "$RUNNER_TEMP/signing/mobet-release.keystore" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --min-sdk-version 26 \
+            --out mobet.apk \
+            mobet-aligned.apk
+          rm -f mobet-aligned.apk mobet-aligned.apk.idsig mobet.apk.idsig
+          test -s mobet.apk
+
+      - name: Shred signing key material
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/signing/mobet-release.keystore" ]; then
+            shred -u "$RUNNER_TEMP/signing/mobet-release.keystore" 2>/dev/null \
+              || rm -f "$RUNNER_TEMP/signing/mobet-release.keystore"
+          fi
+          rm -rf "$RUNNER_TEMP/signing"
+
+      # Independent validation: inspect the finished artifact rather than trusting the step that
+      # produced it. Rejects unsigned APKs, missing v2 signatures, the Android debug certificate,
+      # multiple signers, and any certificate other than the pinned one. Covered by
+      # scripts/test_release_gates.py against recorded apksigner transcripts.
+      - name: Assert production signature
+        env:
+          EXPECTED_CERT_SHA256: ${{ secrets.MOBET_SIGNING_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          ARGS=(--apk mobet.apk --output mobet-signing.json --min-sdk 26 --max-sdk 35)
+          if [ -n "${EXPECTED_CERT_SHA256:-}" ]; then
+            ARGS+=(--expect-cert "$EXPECTED_CERT_SHA256")
+          fi
+          bash scripts/assert-production-signature.sh "${ARGS[@]}"
+          cat mobet-signing.json
+
+      # Signing must not have altered a single byte of the payload the build job produced and
+      # the evidence bundle describes. This ties the signed artifact to the reproducibility
+      # report, which is measured on unsigned builds.
+      - name: Confirm signing preserved the built payload
+        run: |
+          set -euo pipefail
+          python3 scripts/apk-content-digest.py --verify-report mobet-reproducibility.json \
+            --apk mobet.apk --against mobet-unsigned.apk
+
+      - name: Record signed digests
+        run: |
+          set -euo pipefail
+          sha256sum mobet.apk | tee mobet.apk.sha256
+          python3 - <<'PYTHON'
+          import hashlib, json
+          digest = hashlib.sha256(open("mobet.apk", "rb").read()).hexdigest()
+          manifest = json.load(open("mobet-capability.json"))
+          manifest["artifact"] = "mobet.apk"
+          manifest["sha256"] = digest
+          json.dump(manifest, open("mobet-capability.json", "w"), indent=2)
+          open("mobet-capability.json", "a").write("\n")
+
+          # The evidence bundle is built over the unsigned payload; record the signed digest
+          # alongside it so a reviewer can follow the chain without guessing.
+          report = json.load(open("mobet-reproducibility.json"))
+          report["signedSha256"] = digest
+          json.dump(report, open("mobet-reproducibility.json", "w"), indent=2)
+          open("mobet-reproducibility.json", "a").write("\n")
           PYTHON
-          cat mobet-reproducibility.json
 
       - name: Generate SLSA build provenance
         id: provenance
@@ -116,10 +302,20 @@ jobs:
 
       - name: Stage offline Sigstore bundle
         run: |
+          set -euo pipefail
           cp "${{ steps.provenance.outputs.bundle-path }}" mobet.sigstore.json
           test -s mobet.sigstore.json
+          python3 - <<'PYTHON'
+          import json
+          bundle = json.load(open("mobet.sigstore.json"))
+          # A truncated or placeholder bundle here would silently break offline verification
+          # on-device, where there is no network to fall back on.
+          assert "dsseEnvelope" in bundle or "messageSignature" in bundle, "no signature in bundle"
+          assert bundle.get("verificationMaterial"), "no verification material in bundle"
+          print("Sigstore bundle media type:", bundle.get("mediaType"))
+          PYTHON
 
-      - name: Upload APK
+      - name: Upload signed release assets
         uses: actions/upload-artifact@v4
         with:
           name: mobet-apk
@@ -127,6 +323,7 @@ jobs:
             mobet.apk
             mobet.apk.sha256
             mobet-capability.json
+            mobet-signing.json
             mobet-evidence.zip
             mobet-evidence.zip.sha256
             mobet-reproducibility.json
@@ -135,12 +332,12 @@ jobs:
 
   publish:
     name: Publish GitHub release
-    needs: build
+    needs: sign
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download built APK
+      - name: Download signed release assets
         uses: actions/download-artifact@v4
         with:
           name: mobet-apk
@@ -160,6 +357,27 @@ jobs:
           TITLE="${TITLE:-$TAG}"
           RUN_URL="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
 
+          # Re-assert the signing facts from the sign job's own evidence, and refuse to publish
+          # if it claims anything other than a signed, non-debug artifact.
+          CERT_SHA256="$(python3 -c 'import json;print(json.load(open("mobet-signing.json"))["certSha256"])')"
+          SIGNER_DN="$(python3 -c 'import json;print(json.load(open("mobet-signing.json"))["signerDn"])')"
+          python3 - <<'PYTHON'
+          import json, sys
+          s = json.load(open("mobet-signing.json"))
+          if not s.get("signed") or s.get("debugKey"):
+              sys.exit("Refusing to publish: mobet-signing.json does not attest a production signature.")
+          PYTHON
+          REPRO="$(python3 -c 'import json;print(json.load(open("mobet-reproducibility.json"))["status"])')"
+
+          # A semver pre-release tag (v1.0.0-rc1) must never become "latest": that URL is the
+          # documented install path, and rotating it to a release candidate would hand every new
+          # user an untested build. Dry runs are expected to use such tags.
+          LATEST_FLAGS=(--latest)
+          case "$TAG" in
+            *-*) LATEST_FLAGS=(--prerelease --latest=false)
+                 echo "Tag $TAG is a pre-release; not rotating releases/latest." ;;
+          esac
+
           cat > release-notes.md <<EOF
           ## Mobet ${TAG}
 
@@ -167,16 +385,40 @@ jobs:
 
           \`https://github.com/${REPO}/releases/latest/download/mobet.apk\`
 
-          - Built from commit [\`${COMMIT:0:10}\`](${GITHUB_SERVER_URL}/${REPO}/commit/${COMMIT}) (debug build, signed with the debug key)
+          - Built from commit [\`${COMMIT:0:10}\`](${GITHUB_SERVER_URL}/${REPO}/commit/${COMMIT}) — **release build, production-signed**
           - Asset: \`mobet.apk\` — ${SIZE}
           - SHA-256: \`${SHA}\`
+          - Signer certificate SHA-256: \`${CERT_SHA256}\`
+          - Signer DN: \`${SIGNER_DN}\`
+          - Independent rebuild of the unsigned payload: **${REPRO}**
           - Build log: ${RUN_URL}
+
+          ### Verify before installing
+
+          \`\`\`sh
+          gh release download ${TAG} --repo ${REPO} \\
+            -p 'mobet.apk' -p 'mobet.apk.sha256' -p 'mobet-signing.json' \\
+            -p 'mobet.sigstore.json' -p 'mobet-capability.json' \\
+            -p 'mobet-evidence.zip' -p 'mobet-reproducibility.json'
+          bash scripts/verify-release-apk.sh --dir . --expect-cert ${CERT_SHA256}
+          \`\`\`
+
+          \`scripts/verify-release-apk.sh\` checks the SHA-256, runs \`apksigner verify\`, rejects the
+          Android debug certificate, pins the signer fingerprint, confirms the signed APK's payload
+          matches the independently rebuilt one, and verifies \`mobet.sigstore.json\` against the APK
+          digest. See [docs/RELEASE_VERIFICATION.md](${GITHUB_SERVER_URL}/${REPO}/blob/${COMMIT}/docs/RELEASE_VERIFICATION.md).
+
+          > **Upgrading from v0.8.0 or earlier:** those builds were debug-signed, so Android will
+          > report \`INSTALL_FAILED_UPDATE_INCOMPATIBLE\`. Export your workflow library
+          > (overflow menu → *Export library*), uninstall the old Mobet, install this APK, then
+          > re-import. This is the last upgrade that requires it — from v1.0.0 onward every release
+          > is signed with the same production key, so updates install in place.
           EOF
 
-          gh release create "$TAG" mobet.apk mobet.apk.sha256 mobet-capability.json \
+          gh release create "$TAG" mobet.apk mobet.apk.sha256 mobet-capability.json mobet-signing.json \
             mobet-evidence.zip mobet-evidence.zip.sha256 mobet-reproducibility.json mobet.sigstore.json \
             --repo "$REPO" \
             --target "$COMMIT" \
             --title "$TITLE" \
             --notes-file release-notes.md \
-            --latest
+            "${LATEST_FLAGS[@]}"

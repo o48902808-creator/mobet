@@ -151,21 +151,36 @@ Download the latest release APK:
 
 https://github.com/o48902808-creator/mobet/releases/latest/download/mobet.apk
 
-The release workflow (`.github/workflows/release.yml`) builds `gradle test
-assembleDebug` and ships `app-debug.apk` as `mobet.apk`, so the release is signed with
-the standard Android debug key. **No keystore, signing key, or `MOBET_*` GitHub
-secrets are needed to build or publish it** — the optional `MOBET_KEYSTORE_*`
-environment variables in `app/build.gradle.kts` only affect local `assembleRelease`
-builds, which the release workflow never invokes.
+The release workflow (`.github/workflows/release.yml`) builds `gradle test assembleRelease`
+and ships a **production-signed** `mobet.apk`. Signing material comes from GitHub Actions
+secrets; the workflow refuses to run without them and independently re-verifies the finished
+APK with `apksigner`, rejecting anything unsigned or carrying the Android debug certificate.
+See [docs/RELEASE_SIGNING.md](docs/RELEASE_SIGNING.md).
 
-All builds use the debug key, but an in-place update can still fail with a
-signature-mismatch error (notably between APKs built on different machines). If the
-installer refuses the update, **uninstall the old Mobet first** — this clears its
-saved workflows, secrets, captures, and audit ledger — then install the downloaded
-APK.
+**Verify before you install** — every claim below is recomputed locally from the downloaded
+bytes, so you do not have to trust the release notes or the build log:
+
+```sh
+bash scripts/verify-release-apk.sh --tag v1.0.0 --expect-cert <signer-fingerprint>
+```
+
+It checks the SHA-256 against the published sidecar, runs `apksigner verify`, rejects the
+debug key, pins the signer certificate, confirms the embedded capability manifest is
+self-consistent and binds this exact APK, validates the evidence bundle and reproducibility
+report, and verifies `mobet.sigstore.json` against the APK digest. Missing tools are reported
+as `SKIP`, never as a pass.
+
+> **Upgrading from v0.8.0 or earlier:** those releases were debug-signed, so this one cannot
+> install over them — Android reports `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Export your
+> workflow library (overflow menu → *Export library*), uninstall the old Mobet, install
+> v1.0.0, then re-import. With `allowBackup=false`, uninstalling otherwise discards saved
+> workflows, secrets, captures, and the audit ledger. From v1.0.0 onward every release shares
+> the same signing key, so updates install in place.
 
 Maintainer release runbook (merge evidence, the three one-time repository settings,
-tagging v0.7.0, upgrade/rollback semantics): [docs/PRODUCTION.md](docs/PRODUCTION.md).
+signing setup, tagging v1.0.0, upgrade/rollback semantics):
+[docs/PRODUCTION.md](docs/PRODUCTION.md) and
+[docs/RELEASE_SIGNING.md](docs/RELEASE_SIGNING.md).
 
 ### Build from source
 

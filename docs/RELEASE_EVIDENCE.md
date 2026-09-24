@@ -14,8 +14,30 @@ envelope binds the exact emulator-built APK, pinned capability identity, API 29/
 and every connected-test report digest without embedding the reports, screenshots, or screen data.
 A SHA-256 sidecar accompanies it.
 
-Release CI also performs a clean second build and publishes `mobet-reproducibility.json` with both
-APK hashes and an honest `reproducible` or `non-reproducible` result. A mismatch is reported rather
-than hidden; it does not replace the separately attested first artifact. The evidence zip, its
-SHA-256 sidecar, capability manifest, reproducibility report, APK digest, and APK are release
-assets.
+Release CI also publishes `mobet-signing.json` (`mobet.signing.v1`): the signer certificate's
+SHA-256 and SHA-1 digests, the distinguished name, which signature schemes are present, and the
+SDK range verified. It is produced by parsing `apksigner verify --print-certs` output against the
+finished artifact, not by restating build configuration, and the publish job refuses to create a
+release unless it attests a signed, non-debug APK. Users pin the fingerprint it carries; see
+`docs/RELEASE_SIGNING.md`.
+
+Release CI also performs a clean second build and publishes `mobet-reproducibility.json`
+(`mobet.reproducibility.v3`). Because Mobet builds unsigned and signs in a separate job, the
+rebuild is measured on **unsigned** artifacts: `firstSha256` and `secondSha256` are whole-file
+digests of two independent builds of the same commit, which any third party can reproduce
+without holding the signing key. `contentSha256` digests every APK entry except the v1 signature
+files (`META-INF/MANIFEST.MF`, `*.SF`, `*.RSA`, `*.DSA`, `*.EC`), so it survives signing and ties
+the published signed APK back to that rebuild; `signedSha256` records the signed artifact. The
+sign job refuses to attest anything whose payload digest moved during signing, and
+`scripts/apk-content-digest.py` is the single implementation of that measurement. A
+non-reproducible rebuild is reported honestly and raised as a workflow warning rather than
+hidden.
+
+`scripts/verify-release-apk.sh` re-checks all of this from the downloaded bytes alone: archive
+integrity, published digest, `apksigner` signature and debug-key rejection, fingerprint pinning,
+capability manifest self-consistency and embedded/sidecar agreement, evidence-bundle binding and
+privacy flags, reproducibility status, and the Sigstore bundle's attested subject. Unavailable
+tools are reported as `SKIP` — never silently counted as passes.
+
+The evidence zip, its SHA-256 sidecar, capability manifest, signing report, reproducibility report,
+Sigstore bundle, APK digest, and APK are release assets.

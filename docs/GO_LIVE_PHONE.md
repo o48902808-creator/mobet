@@ -40,12 +40,18 @@ Two of the three are fully automated; run that first:
 ## Phase 3 — cut the release (≈6 min, mostly waiting)
 
 8. **Actions → Release APK → Run workflow**. Fill in:
-   - *Tag:* `v0.7.0`
-   - *Title:* `v0.7.0`
+   - *Tag:* `v1.0.0`
+   - *Title:* `v1.0.0`
    → **Run workflow**.
-9. Wait for the green check (~5 min: it runs the full test suite, builds the APK,
-   hashes it, and the publish job re-verifies the hash before publishing).
-10. Open the **Code** tab → **Releases** (right column) → confirm **v0.7.0** is
+   (One-time first: the four `MOBET_KEYSTORE_*`/`MOBET_KEY_*` signing secrets must
+   exist, or the run stops at its first step on purpose — see
+   [RELEASE_SIGNING.md](RELEASE_SIGNING.md). That step needs a laptop; it is the one
+   part of this runbook you cannot do from a phone.)
+9. Wait for the green check (~8 min: full test suite, signed release build,
+   `apksigner` signature check, evidence bundle, a clean rebuild for the
+   reproducibility report, and the Sigstore attestation; the publish job re-verifies
+   the hash and the signing evidence before publishing).
+10. Open the **Code** tab → **Releases** (right column) → confirm **v1.0.0** is
     there with a `mobet.apk` asset. Your permanent download link is now live:
     **https://github.com/o48902808-creator/mobet/releases/latest/download/mobet.apk**
 
@@ -56,7 +62,8 @@ Two of the three are fully automated; run that first:
     browser — this is a per-app, revocable permission, not a global switch:
     allow it for the browser, tap back, and confirm **Install**.
 13. If an older Mobet is already installed and the installer refuses (signature
-    mismatch — expected, debug keys differ per build host): in Mobet's overflow
+    mismatch — expected once, because v0.8.0 and earlier were debug-signed and
+    v1.0.0 is production-signed; later updates install in place): in Mobet's overflow
     menu use **Export library** first (uninstall wipes saved workflows, secrets,
     and captures — `allowBackup=false` is deliberate), then uninstall the old
     copy and install fresh.
