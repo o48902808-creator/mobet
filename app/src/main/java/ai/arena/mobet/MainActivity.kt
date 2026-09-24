@@ -18,6 +18,10 @@ import ai.arena.mobet.provenance.BuildIntegrityReport
 import ai.arena.mobet.provenance.ProvenanceVerification
 import ai.arena.mobet.provenance.SigstoreProvenance
 import ai.arena.mobet.security.SecretStore
+import ai.arena.mobet.synthesis.SynthesizedWorkflow
+import ai.arena.mobet.synthesis.TraceSynthesizer
+import ai.arena.mobet.synthesis.WorkflowRecipes
+import ai.arena.mobet.synthesis.WorkflowSynthesizer
 import ai.arena.mobet.ui.JsonErrorLocator
 import ai.arena.mobet.ui.JsonHighlighter
 import ai.arena.mobet.ui.MobetUi
@@ -1431,7 +1435,7 @@ class MainActivity : AppCompatActivity() {
         val input = MobetUi.Field(
             this,
             "Goal",
-            "Example: tap “Network & internet” then wait for “Internet”",
+            "open “Network & internet” then tap “Wi-Fi”; verify “On” appears",
             lines = 3
         )
         MobetUi.dialog(this)
@@ -1439,18 +1443,67 @@ class MainActivity : AppCompatActivity() {
             .setIcon(R.drawable.ic_plan)
             .setMessage(
                 "Target: ${snapshot.packageName}\n" +
-                    "Only elements verified on the captured screen can be planned."
+                    "Only elements verified on the captured screen can be planned.\n\n" +
+                    "Clauses: tap/open/fill/scroll/wait/back/home · verify “X” appears · " +
+                    "if “X” appears then … · repeat … until “X” appears max N. " +
+                    "Separate with “then”, “;” or new lines."
             )
             .setView(MobetUi.formContainer(this, input.layout))
             .setPositiveButton("Generate") { _, _ ->
-                ai.arena.mobet.planner.GoalPlanner.generate(input.value, snapshot)
-                    .onSuccess { plan ->
-                        editor.setText(plan)
-                        showStatus("Plan generated and policy-validated — review before running", Tone.SUCCESS)
-                    }
-                    .onFailure { showStatus("Planner rejected goal: ${it.message}", Tone.DANGER) }
+                WorkflowSynthesizer.synthesize(input.value, snapshot)
+                    .onSuccess(::presentSynthesis)
+                    .onFailure { showStatus("Generator rejected goal: ${it.message}", Tone.DANGER) }
             }
+            .setNeutralButton("Recipes") { _, _ -> showRecipePicker(snapshot) }
             .setNegativeButton(R.string.action_cancel, null)
+            .show()
+    }
+
+    /**
+     * Parameterised authoring patterns. A recipe only expands into the same goal clauses the
+     * grammar already accepts, so it is grounded, risk-gated and validated exactly like typed
+     * text — convenience, never extra authority.
+     */
+    private fun showRecipePicker(snapshot: ai.arena.mobet.automation.ScreenSnapshot) {
+        val recipes = WorkflowRecipes.catalogue
+        MobetUi.picker(
+            activity = this,
+            title = "Workflow recipes",
+            subtitle = "Grounded in ${snapshot.packageName} — nothing runs until you press Run",
+            icon = R.drawable.ic_plan,
+            rows = recipes.map { Row(title = it.title, subtitle = it.summary, icon = R.drawable.ic_plan) }
+        ) { index ->
+            val recipe = recipes[index]
+            val fields = recipe.parameters.map { parameter ->
+                parameter to MobetUi.Field(this, parameter.label, parameter.hint)
+            }
+            MobetUi.dialog(this)
+                .setTitle(recipe.title)
+                .setIcon(R.drawable.ic_plan)
+                .setMessage(recipe.summary)
+                .setView(MobetUi.formContainer(this, *fields.map { it.second.layout }.toTypedArray()))
+                .setPositiveButton("Generate") { _, _ ->
+                    val values = fields.associate { (parameter, field) -> parameter.key to field.value }
+                    recipe.synthesize(values, snapshot)
+                        .onSuccess(::presentSynthesis)
+                        .onFailure { showStatus("Recipe rejected: ${it.message}", Tone.DANGER) }
+                }
+                .setNegativeButton(R.string.action_cancel, null)
+                .show()
+        }
+    }
+
+    /** Shows the generated plan's rationale; the document only changes if the user inserts it. */
+    private fun presentSynthesis(result: SynthesizedWorkflow) {
+        MobetUi.ReportSheet(this)
+            .title("Generated plan", R.drawable.ic_plan)
+            .subtitle("${result.stepCount} steps · policy-validated · nothing has run")
+            .monospace(result.report())
+            .action(getString(R.string.action_close))
+            .action("Insert", primary = true) {
+                editor.setText(result.json)
+                showStatus("Plan inserted and policy-validated — review before running", Tone.SUCCESS)
+            }
             .show()
     }
 
@@ -1912,6 +1965,22 @@ class MainActivity : AppCompatActivity() {
             if (recorded.length() == 0) {
                 showStatus("Stopped. No recorded taps to import")
                 return
+            }
+            // Preferred path: synthesize a *workflow* from the trace (duplicate events removed,
+            // scroll runs coalesced, waits inserted, risk confirmations added, policy validated)
+            // instead of pasting raw events that would replay against a half-loaded screen.
+            if (target != null) {
+                val synthesized = TraceSynthesizer.synthesize(
+                    recorded = source,
+                    packageName = target,
+                    options = ai.arena.mobet.synthesis.TraceOptions(
+                        name = "Recorded in $target"
+                    )
+                )
+                if (synthesized.isSuccess) {
+                    presentSynthesis(synthesized.getOrThrow())
+                    return
+                }
             }
             val root = JSONObject(editor.text.toString())
             val steps = root.optJSONArray("steps") ?: JSONArray().also { root.put("steps", it) }
