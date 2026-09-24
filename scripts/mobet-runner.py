@@ -14,6 +14,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -218,6 +219,41 @@ class AppiumSession:
         path.write_bytes(base64.b64decode(encoded))
 
 
+VAR_PATTERN = re.compile(r"\{\{(var|secret):([A-Za-z0-9_.-]+)}}")
+
+
+def expand_string(value: str, variables: dict[str, str]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        kind, name = match.groups()
+        if kind == "var":
+            if name not in variables:
+                raise RunnerError(f"missing workflow variable: {name}")
+            return str(variables[name])
+        environment_name = "MOBET_SECRET_" + name.replace(".", "_").replace("-", "_")
+        secret = os.getenv(environment_name)
+        if secret is None:
+            raise RunnerError(f"missing CLI secret environment variable: {environment_name}")
+        return secret
+    return VAR_PATTERN.sub(replace, value)
+
+
+def expand_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
+    """Apply the same variable/secret placeholder convention as WorkflowRunner."""
+    expanded = json.loads(json.dumps(workflow))
+    variables = {str(key): str(value) for key, value in (expanded.get("variables") or {}).items()}
+
+    def visit(value: Any) -> Any:
+        if isinstance(value, str):
+            return expand_string(value, variables)
+        if isinstance(value, list):
+            return [visit(item) for item in value]
+        if isinstance(value, dict):
+            return {key: visit(item) for key, item in value.items()}
+        return value
+
+    return visit(expanded)
+
+
 def selector_from_step(step: dict[str, Any]) -> dict[str, Any]:
     return {
         key: step[key]
@@ -239,6 +275,7 @@ def require_policy(workflow: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     max_actions = int(policy.get("maxActions", 50))
     if len(steps) > max_actions:
         raise RunnerError(f"workflow has {len(steps)} steps; limit is {max_actions}")
+    labels = {step.get("label"): index for index, step in enumerate(steps) if step.get("label")}
     for index, step in enumerate(steps, 1):
         action = str(step.get("action", "")).lower()
         if action not in allowed_actions:
@@ -247,6 +284,16 @@ def require_policy(workflow: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             raise RunnerError(f"step {index}: visual fallback is disabled")
         if action == "launch" and step.get("package") not in allowed_packages:
             raise RunnerError(f"step {index}: launch package is outside the allowlist")
+        if action in {"branch", "repeatuntil"}:
+            if not step.get("expect"):
+                raise RunnerError(f"step {index}: {action} requires expect")
+            target = step.get("goto")
+            if not target or target not in labels:
+                raise RunnerError(f"step {index}: unknown goto label {target!r}")
+            if action == "repeatuntil" and labels[target] >= index - 1:
+                raise RunnerError(f"step {index}: repeatuntil must jump backwards")
+        if action == "branch" and step.get("elseGoto") and step["elseGoto"] not in labels:
+            raise RunnerError(f"step {index}: unknown elseGoto label {step['elseGoto']!r}")
     return str(package_name), policy
 
 
@@ -277,10 +324,33 @@ def check_expectation(
         raise RunnerError("expectation package is outside the target package")
 
 
+def expectation_holds(
+    session: AppiumSession,
+    expectation: dict[str, Any] | None,
+    baseline: str | None = None,
+) -> bool:
+    if not expectation:
+        return True
+    source = session.page_source()
+    if expectation.get("screenChange") and baseline is not None:
+        if hashlib.sha256(baseline.encode()).digest() == hashlib.sha256(source.encode()).digest():
+            return False
+    haystack = source.casefold()
+    present = expectation.get("textPresent")
+    absent = expectation.get("textAbsent")
+    if present and str(present).casefold() not in haystack:
+        return False
+    if absent and str(absent).casefold() in haystack:
+        return False
+    expected_package = expectation.get("package")
+    return not expected_package or session.active_package() == expected_package
+
+
 def execute_step(
     session: AppiumSession,
     step: dict[str, Any],
     package_name: str,
+    allowed_packages: set[str],
     approve: bool,
     captures: Path,
 ) -> None:
@@ -319,8 +389,8 @@ def execute_step(
         target = step.get("package")
         if not target:
             raise RunnerError("launch requires package")
-        if target != package_name:
-            raise RunnerError("launch target is outside the target package")
+        if target not in allowed_packages:
+            raise RunnerError("launch target is outside the policy allowlist")
         session.launch(target)
     elif action == "confirm":
         if not approve:
@@ -343,29 +413,68 @@ def run_workflow(
     approve: bool,
     captures: Path,
 ) -> tuple[bool, str, float]:
-    package_name, _policy = require_policy(workflow)
+    workflow = expand_workflow(workflow)
+    package_name, policy = require_policy(workflow)
+    allowed_packages = set(policy.get("allowedPackages") or [package_name])
+    max_runtime_ms = int(policy.get("maxRuntimeMs", 120_000))
+    max_actions = int(policy.get("maxActions", 50))
     session = AppiumSession(server_url, package_name)
     started = time.monotonic()
+    steps = workflow.get("steps", [])
+    labels = {step.get("label"): index for index, step in enumerate(steps) if step.get("label")}
+    index = 0
+    action_count = 0
+    control_hops = 0
+    iterations: dict[int, int] = {}
     try:
         session.start()
-        for index, raw_step in enumerate(workflow.get("steps", []), 1):
+        while index < len(steps):
+            if (time.monotonic() - started) * 1000 > max_runtime_ms:
+                raise RunnerError(f"runtime budget exceeded ({max_runtime_ms} ms)")
+            raw_step = steps[index]
             step = dict(raw_step)
             action = str(step.get("action", "")).lower()
-            if step.get("ifText") and _find_optional(session, {"text": step["ifText"]}, int(step.get("timeoutMs", 5000))):
-                pass
-            elif step.get("ifText"):
+            if step.get("ifText") and not _find_optional(
+                session, {"text": step["ifText"]}, int(step.get("timeoutMs", 5000))
+            ):
+                index += 1
                 continue
-            if step.get("unlessText") and _find_optional(session, {"text": step["unlessText"]}, int(step.get("timeoutMs", 5000))):
+            if step.get("unlessText") and _find_optional(
+                session, {"text": step["unlessText"]}, int(step.get("timeoutMs", 5000))
+            ):
+                index += 1
                 continue
+
+            if action in {"branch", "repeatuntil"}:
+                control_hops += 1
+                if control_hops > max(50, len(steps) * 4):
+                    raise RunnerError("control-flow hop budget exhausted")
+                satisfied = expectation_holds(session, step.get("expect"))
+                target = step.get("goto") if satisfied else step.get("elseGoto")
+                if action == "repeatuntil" and not satisfied:
+                    iterations[index] = iterations.get(index, 0) + 1
+                    if iterations[index] > int(step.get("maxIterations", 10)):
+                        raise RunnerError(f"step {index + 1}: repeatuntil iteration limit exceeded")
+                    target = step.get("goto")
+                if target:
+                    index = labels[target]
+                else:
+                    index += 1
+                continue
+
+            action_count += 1
+            if action_count > max_actions:
+                raise RunnerError(f"action budget exceeded ({max_actions})")
             retries = int(step.get("retries", 0))
             for attempt in range(retries + 1):
                 try:
-                    execute_step(session, step, package_name, approve, captures)
+                    execute_step(session, step, package_name, allowed_packages, approve, captures)
                     break
                 except RunnerError:
                     if attempt >= retries:
                         raise
-        return True, f"Completed {len(workflow.get('steps', []))} steps", time.monotonic() - started
+            index += 1
+        return True, f"Completed {len(steps)} steps", time.monotonic() - started
     except (RunnerError, AppiumError) as error:
         return False, str(error), time.monotonic() - started
     finally:

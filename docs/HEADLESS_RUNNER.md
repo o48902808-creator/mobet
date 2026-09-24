@@ -37,3 +37,8 @@ failures in this driver rather than silently degrading to a guessed tap.
 
 All three routes target the same `DeviceDriver` seam; they do not duplicate
 workflow policy inside the drivers.
+
+The `Headless Appium smoke` workflow runs the bundled Settings demo on an API
+29 emulator, starts Appium with UiAutomator2, publishes the JUnit XML report,
+and fails the job when the workflow or its expectations fail. It can be run
+manually from GitHub Actions and also runs for pull requests.
