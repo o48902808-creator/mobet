@@ -298,6 +298,7 @@ jobs:
       - name: Install Appium and UiAutomator2 driver
         run: |
           npm install --global appium@3
+          echo "APPIUM_BIN=$(command -v appium)" >> "$GITHUB_ENV"
           appium driver install uiautomator2
 
       - name: Enable KVM
@@ -317,8 +318,9 @@ jobs:
           emulator-boot-timeout: 900
           script: |
             set -eux
-            trap 'test -z "${APPIUM_PID:-}" || kill "$APPIUM_PID" || true' EXIT
-            APPIUM_BIN="$(npm prefix --global)/bin/appium"
+            mkdir -p headless-test-results
+            trap 'status=$?; printf "status=%s\\nAPPIUM_BIN=%s\\nPATH=%s\\n" "$status" "${APPIUM_BIN:-}" "$PATH" > headless-test-results/diagnostics.txt; test -z "${APPIUM_PID:-}" || kill "$APPIUM_PID" || true; exit "$status"' EXIT
+            test -n "${APPIUM_BIN:-}"
             test -x "$APPIUM_BIN"
             "$APPIUM_BIN" --address 127.0.0.1 --port 4723 > /tmp/appium.log 2>&1 &
             APPIUM_PID=$!
