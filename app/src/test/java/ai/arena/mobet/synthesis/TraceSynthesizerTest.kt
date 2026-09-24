@@ -50,9 +50,27 @@ class TraceSynthesizerTest {
         val raw = TraceSynthesizer.synthesize(
             trace,
             "com.example.app",
-            TraceOptions(dropRepeats = false, coalesceScrolls = false, insertWaits = false)
+            TraceOptions(
+                dropRepeats = false,
+                coalesceScrolls = false,
+                insertWaits = false,
+                optimize = false
+            )
         ).getOrThrow()
         assertEquals(8, raw.workflow.steps.size)
+    }
+
+    @Test
+    fun theOptimizerStillTrimsBlindScrollRunsWhenTraceCleanupIsOff() {
+        // Trace-level coalescing and the plan optimizer are independent passes; with trace
+        // cleanup off the optimizer is the remaining backstop against a 5-deep scroll run.
+        val lean = TraceSynthesizer.synthesize(
+            trace,
+            "com.example.app",
+            TraceOptions(dropRepeats = false, coalesceScrolls = false, insertWaits = false)
+        ).getOrThrow()
+        assertEquals(3, lean.workflow.steps.count { it.action == "scroll" })
+        assertTrue(lean.notes.any { it.stage == "optimizer" })
     }
 
     @Test
