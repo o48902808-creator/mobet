@@ -110,7 +110,9 @@ private class UiAutomatorUiNode(
         get() = object2.isClickable
 
     override val editable: Boolean
-        get() = object2.isEditable
+        // UiObject2 exposes the underlying class, but not an isEditable flag on all
+        // supported UiAutomator versions. EditText is the stable cross-version signal.
+        get() = object2.className?.contains("EditText", ignoreCase = true) == true
 
     override val scrollable: Boolean
         get() = object2.isScrollable
