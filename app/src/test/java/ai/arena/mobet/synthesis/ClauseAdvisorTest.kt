@@ -21,7 +21,8 @@ class ClauseAdvisorTest {
     @Test
     fun verbsTheGrammarAlreadyAcceptsAreNotSecondGuessed() {
         // These parse today; the advisor must never claim otherwise.
-        listOf("click \"Save\"", "enter \"Email\" with \"a\"", "check \"Saved\" appears")
+        // A goal may not *start* with a verify clause, so that one is paired with an action.
+        listOf("click \"Save\"", "enter \"Email\" with \"a\"", "tap \"Save\" then check \"Saved\" appears")
             .forEach { assertTrue("“$it” should parse", IntentGrammar.parse(it).isSuccess) }
         // A clause that parses is never described as a wrong verb.
         assertTrue(ClauseAdvisor.advise("tap \"Save\"")!!.contains("Accepted clause forms"))
