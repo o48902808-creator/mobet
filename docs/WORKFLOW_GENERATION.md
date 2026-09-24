@@ -42,7 +42,7 @@ Accepted clause forms (separate with `then`, `;`, or new lines):
 Budgets: ≤ 40 clauses, ≤ 8 clauses per control-flow body, no nested control flow, a program may
 not begin with a verification.
 
-### 2. Grounding (`SnapshotGrounder.kt`)
+### 2. Grounding (`SnapshotGrounder.kt`, `ScreenMemory.kt`)
 
 Every target is matched against the live accessibility snapshot with `FuzzyText`, blending label
 similarity (90%) with the snapshot's own selector confidence (10%). Three outcomes are kept
@@ -56,6 +56,15 @@ distinct on purpose:
 
 Ranking is a deterministic total order (score, then selector string), so identical goal +
 snapshot always yields byte-identical JSON.
+
+**Multi-screen routes.** Real routes span screens, so grounding falls back to `SessionScreenMemory`
+— a bounded, in-process graph of screens this session has actually shown (12 per package, 8
+packages, keyed by structural identity, never written to disk). Memory grounding is strictly more
+conservative than live grounding: only an unambiguous resolution counts, it never crosses a package
+boundary, the live screen always wins, and the emitted step is *always* preceded by a `wait`, so a
+route that no longer holds fails as a named timeout instead of tapping blind. Every
+memory-grounded step says so in the report, with the age of the screen it came from. Pass
+`ScreenMemory.EMPTY` to restrict generation to the current screen.
 
 ### 3. Lowering and robustness (`WorkflowSynthesizer.kt`)
 
@@ -133,7 +142,10 @@ goal verifies.
 
 `WorkflowRunner` records whether each selector actually resolved, per package. Grounding consults
 that tally through the `GroundingPriors` interface, so plans prefer selectors with a track record.
-Hard limits: the adjustment is clamped to ±0.05 and applied to the *ranking score only* — the
+Weights decay with a 30-day half-life and are persisted through `EncryptedOutcomeJournal` (the
+same AES-GCM/Keystore container as agent memory), flushed once at the end of a run rather than per
+observation — without persistence the tally died with the process and almost never reached its
+minimum-observation threshold. Hard limits: the adjustment is clamped to ±0.05 and applied to the *ranking score only* — the
 grounding threshold is evaluated on raw similarity, so history can never resurrect a target that is
 not on screen nor suppress one that is. It requires at least two observations, keeps a bounded LRU
 of selector identities and counts (no screen text, values or secrets), and can be disabled entirely
@@ -155,6 +167,12 @@ selector. Every construction path that copies a value from the screen — ground
 traces, crystallization, repair — goes through `SelectorSpec.of`, which refuses template syntax,
 so such a control is simply not groundable and never reaches a document.
 
+## Generation-time simulation
+
+Plans are simulated with `PlanSimulator` at generation time, against the same snapshot they were
+grounded in, and the dry-run report is folded into the synthesis report. "Step 4 will probably time
+out" is visible *before* inserting, not after a failed run.
+
 ## What the user sees
 
 The generated plan is presented as a report — grounding scores and chosen selectors, inserted
@@ -162,7 +180,14 @@ waits, alternates, risk confirmations with their reasons, and the synthesized po
 explicit **Insert** action. Because Insert overwrites the editor, the report also carries a
 step-level diff (`PlanDiff`, LCS over canonical step signatures) whenever the editor already holds
 a parsable plan. Generation has no device effects; running still requires the existing separate,
-explicit tap.
+explicit tap. **Save & schedule** names the plan, stores it in the library — the unit
+`WorkflowTransfer` exports as a signed v2 bundle — and offers a run *reminder* (Mobet prompts; it
+never starts a run itself). The authored document also carries a live robustness chip in the editor
+summary, tappable for the finding list.
+
+All of these flows live in `ui/GenerationController`, which talks to the activity through the
+narrow `GenerationHost` surface (read document, replace document, status, schedule) rather than
+owning views.
 
 ## Tests
 

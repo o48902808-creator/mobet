@@ -19,15 +19,10 @@ import ai.arena.mobet.provenance.BuildIntegrityReport
 import ai.arena.mobet.provenance.ProvenanceVerification
 import ai.arena.mobet.provenance.SigstoreProvenance
 import ai.arena.mobet.security.SecretStore
-import ai.arena.mobet.synthesis.AgentCrystallizer
-import ai.arena.mobet.synthesis.PlanDiff
 import ai.arena.mobet.synthesis.PlanQuality
-import ai.arena.mobet.synthesis.QualitySeverity
-import ai.arena.mobet.synthesis.SynthesizedWorkflow
 import ai.arena.mobet.synthesis.TraceSynthesizer
-import ai.arena.mobet.synthesis.WorkflowRecipes
-import ai.arena.mobet.synthesis.WorkflowRepair
-import ai.arena.mobet.synthesis.WorkflowSynthesizer
+import ai.arena.mobet.ui.GenerationController
+import ai.arena.mobet.ui.GenerationHost
 import ai.arena.mobet.ui.JsonErrorLocator
 import ai.arena.mobet.ui.JsonHighlighter
 import ai.arena.mobet.ui.MobetUi
@@ -87,7 +82,18 @@ import java.util.Locale
  * cramped alert dialogs, and every transient message is a snackbar plus a persistent entry in
  * the activity log so nothing is lost when a toast disappears.
  */
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), GenerationHost {
+
+    /**
+     * Workflow generation lives in its own controller (docs/WORKFLOW_GENERATION.md); the activity
+     * owns views and lifecycle, and exposes only the narrow [GenerationHost] surface to it.
+     */
+    private val generation by lazy { GenerationController(this) }
+
+    override val activity: AppCompatActivity get() = this
+    override fun currentSource(): String = editor.text?.toString().orEmpty()
+    override fun replaceSource(json: String) = editor.setText(json)
+    override fun status(message: String, tone: Tone) = showStatus(message, tone)
 
     private lateinit var serviceState: TextView
     private lateinit var serviceDetail: TextView
@@ -124,8 +130,6 @@ class MainActivity : AppCompatActivity() {
      * recorded workflow would be rejected until hand-edited.
      */
     private var recordingPackage: String? = null
-    /** Last autonomous run already offered for crystallization; prevents repeat prompts. */
-    private var crystallizedRun: ai.arena.mobet.agent.AgentRunResult? = null
 
     /**
      * Debounce for the live summary chips.
@@ -435,15 +439,15 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.recordTaps).setOnClickListener { startRecorder() }
         findViewById<View>(R.id.chooseTarget).setOnClickListener { chooseTargetApp() }
         findViewById<View>(R.id.editSteps).setOnClickListener { showStepBuilder() }
-        findViewById<View>(R.id.generatePlan).setOnClickListener { showGoalPlanner() }
+        findViewById<View>(R.id.generatePlan).setOnClickListener { generation.showGoalPlanner() }
         findViewById<View>(R.id.runGoal).setOnClickListener { showAutonomousGoal() }
-        findViewById<View>(R.id.dryRun).setOnClickListener { dryRunPlan() }
+        findViewById<View>(R.id.dryRun).setOnClickListener { generation.dryRunPlan() }
         findViewById<View>(R.id.inspectScreen).setOnClickListener { showInspector() }
         findViewById<View>(R.id.showDiagnostics).setOnClickListener { showDiagnostics() }
         findViewById<View>(R.id.showCaptures).setOnClickListener { showLatestCapture() }
         findViewById<View>(R.id.showAudit).setOnClickListener { showAuditLedger() }
         findViewById<View>(R.id.showMemory).setOnClickListener { showAgentMemory() }
-        findViewById<View>(R.id.validatePolicy).setOnClickListener { validatePlan() }
+        findViewById<View>(R.id.validatePolicy).setOnClickListener { generation.validatePlan() }
         // The two controls with real-world consequences get tactile confirmation.
         findViewById<View>(R.id.runWorkflow).setOnClickListener {
             it.haptic(confirming = true)
@@ -536,7 +540,7 @@ class MainActivity : AppCompatActivity() {
                 quality.score >= 50 -> Tone.NEUTRAL
                 else -> Tone.WARNING
             }
-            addChip("Quality ${quality.grade} · ${quality.score}", tone) { showQualityReport(quality) }
+            addChip("Quality ${quality.grade} · ${quality.score}", tone) { generation.showQualityReport(quality) }
         }
         val violations = summary.violations
         if (violations.isEmpty()) {
@@ -547,35 +551,8 @@ class MainActivity : AppCompatActivity() {
             addChip(
                 "${violations.size} policy issue${if (violations.size == 1) "" else "s"}",
                 Tone.DANGER, R.drawable.ic_warning
-            ) { validatePlan() }
+            ) { generation.validatePlan() }
         }
-    }
-
-    /** Advisory robustness findings; never a gate, so the sheet offers no "fix" action. */
-    private fun showQualityReport(quality: PlanQuality) {
-        val sheet = MobetUi.ReportSheet(this)
-            .title("Plan robustness", R.drawable.ic_policy)
-            .subtitle("Advisory only — policy validation is separate and authoritative")
-            .monospace("Grade       ${quality.grade} (${quality.score}/100)")
-        if (quality.findings.isEmpty()) {
-            sheet.paragraph("No robustness concerns found in this plan.")
-        } else {
-            sheet.rows(
-                quality.findings.map { finding ->
-                    Row(
-                        title = finding.message,
-                        subtitle = finding.step?.let { "Step $it" } ?: "Plan level",
-                        icon = when (finding.severity) {
-                            QualitySeverity.WARNING -> R.drawable.ic_warning
-                            QualitySeverity.ADVICE -> R.drawable.ic_policy
-                            QualitySeverity.INFO -> R.drawable.ic_check
-                        },
-                        showChevron = false
-                    )
-                }
-            )
-        }
-        sheet.action(getString(R.string.action_close)).show()
     }
 
     private fun addChip(label: String, tone: Tone, icon: Int? = null, onClick: (() -> Unit)? = null) {
@@ -1469,189 +1446,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showGoalPlanner() {
-        val snapshot = MobetAccessibilityService.instance?.latestSnapshot()
-        if (snapshot == null || snapshot.elements.isEmpty()) {
-            showStatus("Visit the target app first so the goal can be grounded in its screen", Tone.WARNING)
-            return
-        }
-        val input = MobetUi.Field(
-            this,
-            "Goal",
-            "open “Network & internet” then tap “Wi-Fi”; verify “On” appears",
-            lines = 3
-        )
-        MobetUi.dialog(this)
-            .setTitle("Generate grounded plan")
-            .setIcon(R.drawable.ic_plan)
-            .setMessage(
-                "Target: ${snapshot.packageName}\n" +
-                    "Only elements verified on the captured screen can be planned.\n\n" +
-                    "Clauses: tap/open/fill/scroll/wait/back/home · verify “X” appears · " +
-                    "if “X” appears then … · repeat … until “X” appears max N. " +
-                    "Separate with “then”, “;” or new lines."
-            )
-            .setView(MobetUi.formContainer(this, input.layout))
-            .setPositiveButton("Generate") { _, _ ->
-                WorkflowSynthesizer.synthesize(input.value, snapshot)
-                    .onSuccess(::presentSynthesis)
-                    .onFailure { showStatus("Generator rejected goal: ${it.message}", Tone.DANGER) }
-            }
-            .setNeutralButton("Recipes") { _, _ -> showRecipePicker(snapshot) }
-            .setNegativeButton(R.string.action_cancel, null)
-            .show()
-    }
-
-    /**
-     * Parameterised authoring patterns. A recipe only expands into the same goal clauses the
-     * grammar already accepts, so it is grounded, risk-gated and validated exactly like typed
-     * text — convenience, never extra authority.
-     */
-    private fun showRecipePicker(snapshot: ai.arena.mobet.automation.ScreenSnapshot) {
-        val recipes = WorkflowRecipes.catalogue
-        MobetUi.picker(
-            activity = this,
-            title = "Workflow recipes",
-            subtitle = "Grounded in ${snapshot.packageName} — nothing runs until you press Run",
-            icon = R.drawable.ic_plan,
-            rows = recipes.map { Row(title = it.title, subtitle = it.summary, icon = R.drawable.ic_plan) }
-        ) { index ->
-            val recipe = recipes[index]
-            val fields = recipe.parameters.map { parameter ->
-                parameter to MobetUi.Field(this, parameter.label, parameter.hint)
-            }
-            MobetUi.dialog(this)
-                .setTitle(recipe.title)
-                .setIcon(R.drawable.ic_plan)
-                .setMessage(recipe.summary)
-                .setView(MobetUi.formContainer(this, *fields.map { it.second.layout }.toTypedArray()))
-                .setPositiveButton("Generate") { _, _ ->
-                    val values = fields.associate { (parameter, field) -> parameter.key to field.value }
-                    recipe.synthesize(values, snapshot)
-                        .onSuccess(::presentSynthesis)
-                        .onFailure { showStatus("Recipe rejected: ${it.message}", Tone.DANGER) }
-                }
-                .setNegativeButton(R.string.action_cancel, null)
-                .show()
-        }
-    }
-
-    /** Shows the generated plan's rationale; the document only changes if the user inserts it. */
-    private fun presentSynthesis(result: SynthesizedWorkflow) {
-        // Insert overwrites the editor, so show exactly what would change first.
-        val diff = PlanDiff.between(editor.text?.toString().orEmpty(), result.workflow)
-        MobetUi.ReportSheet(this)
-            .title("Generated plan", R.drawable.ic_plan)
-            .subtitle("${result.stepCount} steps · policy-validated · nothing has run")
-            .monospace(result.report() + (diff?.let { "\n" + it.render() } ?: ""))
-            .action(getString(R.string.action_close))
-            // A generated plan used to dead-end in the editor. Saving it names it, puts it in the
-            // library (the unit every export bundle and reminder is addressed by), and makes the
-            // usual export/schedule paths available without retyping anything.
-            .action("Save & schedule") { insertPlan(result); saveGeneratedPlan(result) }
-            .action("Insert", primary = true) { insertPlan(result) }
-            .show()
-    }
-
-    private fun insertPlan(result: SynthesizedWorkflow) {
-        editor.setText(result.json)
-        showStatus("Plan inserted and policy-validated — review before running", Tone.SUCCESS)
-    }
-
-    /**
-     * Names the generated plan, stores it in the library, and offers to schedule a reminder.
-     *
-     * Scheduling stays a *reminder*: Mobet prompts at the chosen time, it never starts a run on
-     * its own. Library entries are what `WorkflowTransfer` exports as signed v2 bundles, so this
-     * is also the on-ramp to sharing a generated plan.
-     */
-    private fun saveGeneratedPlan(result: SynthesizedWorkflow) {
-        val suggested = result.workflow.name.take(60)
-        val input = MobetUi.Field(this, "Workflow name", "Saved to the library and exportable as a bundle")
-        input.input.setText(suggested)
-        MobetUi.dialog(this)
-            .setTitle("Save generated plan")
-            .setIcon(R.drawable.ic_save)
-            .setView(MobetUi.formContainer(this, input.layout))
-            .setPositiveButton(R.string.action_save) { _, _ ->
-                val name = input.value.ifBlank { suggested }
-                if (name.isBlank()) {
-                    showStatus("A workflow name is required", Tone.WARNING)
-                    return@setPositiveButton
-                }
-                getSharedPreferences("library", MODE_PRIVATE).edit().putString(name, result.json).apply()
-                MobetUi.snack(
-                    this,
-                    "Saved “$name” — exportable as a bundle",
-                    Tone.SUCCESS,
-                    "Schedule"
-                ) { scheduleReminder(name) }
-            }
-            .setNegativeButton(R.string.action_cancel, null)
-            .show()
-    }
-
-    private fun dryRunPlan() {
-        try {
-            val workflow = Workflow.parse(editor.text.toString())
-            val snapshot = MobetAccessibilityService.instance?.latestSnapshot()
-            val report = ai.arena.mobet.planner.PlanSimulator.simulate(workflow, snapshot)
-            MobetUi.ReportSheet(this)
-                .title("Dry run", R.drawable.ic_dryrun)
-                .subtitle("Simulated against the last snapshot — the device is not touched")
-                .monospace(report)
-                .action(getString(R.string.action_close))
-                .show()
-        } catch (error: Exception) {
-            showStatus("Invalid workflow: ${error.message}", Tone.DANGER)
-        }
-    }
-
-    private fun validatePlan() {
-        try {
-            val source = editor.text.toString()
-            val workflow = Workflow.parse(source)
-            val violations = PlanValidator.validate(workflow)
-            val sheet = MobetUi.ReportSheet(this).title("Policy validation", R.drawable.ic_policy)
-            if (violations.isEmpty()) {
-                sheet.banner("✔ Approved by policy", Tone.SUCCESS)
-                    .monospace(
-                        "Target      ${workflow.packageName}\n" +
-                            "Actions     ${workflow.steps.size} / ${workflow.policy.maxActions}\n" +
-                            "Runtime     ${workflow.policy.maxRuntimeMs} ms\n" +
-                            "Visual      ${if (workflow.policy.allowVisualFallbacks) "allowed" else "blocked"}\n" +
-                            "Self-heal   ${if (workflow.policy.allowSelfHealing) "allowed" else "blocked"}\n\n" +
-                            // Advisory robustness read-out; policy already approved the plan.
-                            PlanQuality.analyze(workflow).summary()
-                    )
-            } else {
-                sheet.banner("✖ Rejected — ${violations.size} violation${if (violations.size == 1) "" else "s"}", Tone.DANGER)
-                    .rows(violations.map { violation ->
-                        Row(
-                            title = violation.message,
-                            subtitle = violation.step?.let { "Step $it" } ?: "Plan level",
-                            icon = R.drawable.ic_warning,
-                            showChevron = false
-                        )
-                    })
-            }
-            // Authoring-time repair: re-ground drifted selectors against the screen the user is
-            // on right now. No device effects, no run-time self-healing — the repaired plan is
-            // shown as a report and only replaces the document if the user inserts it.
-            val snapshot = MobetAccessibilityService.instance?.latestSnapshot()
-            if (snapshot != null && snapshot.packageName == workflow.packageName) {
-                sheet.action("Re-ground to screen") {
-                    WorkflowRepair.repair(source, snapshot)
-                        .onSuccess(::presentSynthesis)
-                        .onFailure { showStatus("Cannot re-ground: ${it.message}", Tone.WARNING) }
-                }
-            }
-            sheet.action(getString(R.string.action_close)).show()
-        } catch (error: Exception) {
-            showStatus("Invalid workflow: ${error.message}", Tone.DANGER)
-        }
-    }
-
     // ── Library ──────────────────────────────────────────────────────────────
 
     private fun saveToLibrary() {
@@ -1941,7 +1735,7 @@ class MainActivity : AppCompatActivity() {
      * being present to answer confirmations and hit Stop, so the alarm posts a notification
      * that opens the app with the workflow loaded — the user still presses Run.
      */
-    private fun scheduleReminder(name: String) {
+    override fun scheduleReminder(name: String) {
         val now = java.util.Calendar.getInstance()
         android.app.TimePickerDialog(
             this,
@@ -2063,7 +1857,7 @@ class MainActivity : AppCompatActivity() {
                     )
                 )
                 if (synthesized.isSuccess) {
-                    presentSynthesis(synthesized.getOrThrow())
+                    generation.presentSynthesis(synthesized.getOrThrow())
                     return
                 }
             }
@@ -2227,23 +2021,7 @@ class MainActivity : AppCompatActivity() {
                 ExecutionTimelineEvent.State.RECOVERING
             )
         )
-        if (event.state == ExecutionTimelineEvent.State.SUCCEEDED) offerCrystallization()
-    }
-
-    /**
-     * A verified autonomous run knows a route that worked. Offer to turn it into a deterministic
-     * workflow so the next run is a replay instead of another exploration — reviewed, editable and
-     * subject to the same policy gate as anything else.
-     */
-    private fun offerCrystallization() {
-        val (run, goal) = MobetAccessibilityService.instance?.lastCrystallizableRun() ?: return
-        if (run === crystallizedRun) return
-        MobetUi.snack(this, "Autonomous goal verified — save the route as a workflow?", Tone.SUCCESS, "Save") {
-            crystallizedRun = run
-            AgentCrystallizer.crystallize(run, goal)
-                .onSuccess(::presentSynthesis)
-                .onFailure { showStatus("Cannot crystallize this run: ${it.message}", Tone.WARNING) }
-        }
+        if (event.state == ExecutionTimelineEvent.State.SUCCEEDED) generation.offerCrystallization()
     }
 
     private fun showBusy(busy: Boolean) {
