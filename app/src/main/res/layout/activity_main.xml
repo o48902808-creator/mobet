@@ -41,9 +41,11 @@
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
         <LinearLayout
+            android:id="@+id/contentColumn"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:animateLayoutChanges="true"
+            android:layout_gravity="center_horizontal"
             android:orientation="vertical"
             android:paddingStart="@dimen/mobet_screen_padding"
             android:paddingEnd="@dimen/mobet_screen_padding"
@@ -99,6 +101,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/mobet_gap"
+                        android:contentDescription="@string/open_accessibility_settings_description"
                         android:text="@string/open_accessibility_settings"
                         app:icon="@drawable/ic_accessibility" />
 
@@ -110,10 +113,71 @@
                         style="@style/Widget.Mobet.Button.Text"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:contentDescription="@string/restricted_help_description"
                         android:text="@string/restricted_help_link"
                         android:textSize="13sp"
                         app:icon="@drawable/ic_info"
                         app:iconSize="18dp" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- ══ First run ══════════════════════════════════════════
+                 Three concrete steps for a new install. Each row ticks itself off as the
+                 condition is met, and the whole card removes itself once all three are done —
+                 onboarding that disappears rather than accumulating. -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/onboardingCard"
+                style="@style/Widget.Mobet.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/mobet_gap"
+                android:visibility="gone"
+                tools:visibility="visible">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/onboarding_title"
+                        android:textAppearance="@style/TextAppearance.Mobet.CardTitle" />
+
+                    <TextView
+                        android:id="@+id/onboardingStepOne"
+                        style="@style/TextAppearance.Mobet.Body"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/mobet_gap"
+                        android:textAppearance="@style/TextAppearance.Mobet.Body"
+                        tools:text="1 · Enable the automation service" />
+
+                    <TextView
+                        android:id="@+id/onboardingStepTwo"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:textAppearance="@style/TextAppearance.Mobet.Body"
+                        tools:text="2 · Open the app you want to automate" />
+
+                    <TextView
+                        android:id="@+id/onboardingStepThree"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:textAppearance="@style/TextAppearance.Mobet.Body"
+                        tools:text="3 · Generate a grounded plan" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/onboardingDismiss"
+                        style="@style/Widget.Mobet.Button.Text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="end"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/onboarding_dismiss" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 

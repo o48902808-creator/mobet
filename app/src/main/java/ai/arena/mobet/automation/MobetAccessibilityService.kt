@@ -24,6 +24,8 @@ class MobetAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
+        // Bind the selector-outcome tally to encrypted storage before any run can record into it.
+        ai.arena.mobet.synthesis.EncryptedOutcomeJournal.attachOnce(this)
         emit("Accessibility service connected")
     }
 
@@ -50,7 +52,10 @@ class MobetAccessibilityService : AccessibilityService() {
 
         if (eventPackage != packageName && now - lastInspectionAt >= 700) {
             rootInActiveWindow?.let { root ->
-                try { snapshot = ScreenInspector.inspect(root, eventPackage) }
+                try {
+                    snapshot = ScreenInspector.inspect(root, eventPackage)
+                        .also(ai.arena.mobet.synthesis.SessionScreenMemory::remember)
+                }
                 finally { root.recycle() }
                 lastInspectionAt = now
             }
@@ -69,6 +74,16 @@ class MobetAccessibilityService : AccessibilityService() {
         liveAgent.cancel("Autonomous run replaced by workflow", quiet = true)
         runner?.cancel("Replaced by a new run")
         runner = WorkflowRunner(this, ::emit, emitTimeline = ::emitTimeline).also { it.start(workflow) }
+    }
+
+    /**
+     * The last autonomous run that verified its goal, paired with that goal, so the UI can offer
+     * to crystallize it into a deterministic workflow. Null until a run succeeds.
+     */
+    fun lastCrystallizableRun(): Pair<ai.arena.mobet.agent.AgentRunResult, ai.arena.mobet.agent.AgentGoal>? {
+        val run = liveAgent.lastSuccessfulRun ?: return null
+        val goal = liveAgent.lastSuccessfulGoal ?: return null
+        return run to goal
     }
 
     fun startAutonomous(goal: ai.arena.mobet.agent.AgentGoal) {
@@ -285,7 +300,14 @@ class MobetAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return snapshot
         return try {
             val pkg = root.packageName?.toString() ?: return snapshot
-            ScreenInspector.inspect(root, pkg).also { if (pkg != packageName) snapshot = it }
+            ScreenInspector.inspect(root, pkg).also {
+                if (pkg != packageName) {
+                    snapshot = it
+                    // Screens observed during a run feed the session graph too, so a later goal
+                    // can be planned across the route this run just walked.
+                    ai.arena.mobet.synthesis.SessionScreenMemory.remember(it)
+                }
+            }
         } finally { root.recycle() }
     }
 

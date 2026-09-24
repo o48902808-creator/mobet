@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Landscape on a phone has roughly half the vertical room, and the editor was claiming
+        220dp of it before the first control was reachable. A shorter minimum keeps the action
+        buttons on screen; the editor still grows with its content.
+    -->
+    <dimen name="mobet_editor_min_height">120dp</dimen>
+    <dimen name="mobet_tile_height">64dp</dimen>
+</resources>

@@ -152,11 +152,29 @@ class Deliberator(
 
 enum class AgentStatus { SUCCEEDED, EXHAUSTED, BLOCKED, DEVICE_REJECTED, ABSTAINED }
 
+/**
+ * One accepted, progress-making step that is still on the agent's current path.
+ *
+ * Exploration that was rejected, made no progress, looped, or was later backtracked out of is
+ * deliberately *not* represented here: this is the trail the agent would retrace, which is what
+ * makes a successful run crystallizable into a deterministic workflow
+ * (`synthesis/AgentCrystallizer`). Nothing screen-derived beyond the selector and label the agent
+ * already holds is retained.
+ */
+data class AgentTransition(
+    val fromScreenId: String,
+    val toScreenId: String,
+    val action: AgentAction,
+    val factsGained: Set<String> = emptySet()
+)
+
 data class AgentRunResult(
     val status: AgentStatus,
     val cycles: Int,
     val actions: List<String>,
-    val explanation: String
+    val explanation: String,
+    /** Accepted, non-backtracked path in order; empty for runs that never progressed. */
+    val successPath: List<AgentTransition> = emptyList()
 )
 
 /** Bounded observe–deliberate–act–verify loop with local replanning and DFS backtracking. */
@@ -168,6 +186,9 @@ class AutonomousAgent(
     fun run(goal: AgentGoal): AgentRunResult {
         val actions = mutableListOf<String>()
         val frames = ArrayDeque<Frame>()
+        // Mirrors `frames` exactly: pushed with a frame, popped with a backtrack, so it always
+        // describes the path currently believed to lead towards the goal.
+        val path = mutableListOf<AgentTransition>()
         var cycles = 0
         val startedAt = System.currentTimeMillis()
         var observation = device.observe()
@@ -175,22 +196,23 @@ class AutonomousAgent(
         while (true) {
             // Verify the final observation before budgets prevent another action. Package
             // provenance remains first so a foreign app cannot spoof expected success text.
-            if (observation.packageName != goal.allowedPackage) return AgentRunResult(AgentStatus.BLOCKED, cycles, actions, "package boundary crossed")
-            if (goal.successFact in observation.facts) return AgentRunResult(AgentStatus.SUCCEEDED, cycles, actions, "goal verified")
-            if (cycles >= goal.maxCycles) return AgentRunResult(AgentStatus.EXHAUSTED, cycles, actions, "cycle budget exhausted")
+            if (observation.packageName != goal.allowedPackage) return AgentRunResult(AgentStatus.BLOCKED, cycles, actions, "package boundary crossed", path.toList())
+            if (goal.successFact in observation.facts) return AgentRunResult(AgentStatus.SUCCEEDED, cycles, actions, "goal verified", path.toList())
+            if (cycles >= goal.maxCycles) return AgentRunResult(AgentStatus.EXHAUSTED, cycles, actions, "cycle budget exhausted", path.toList())
             if (System.currentTimeMillis() - startedAt > goal.maxRuntimeMs)
-                return AgentRunResult(AgentStatus.EXHAUSTED, cycles, actions, "runtime budget exhausted")
+                return AgentRunResult(AgentStatus.EXHAUSTED, cycles, actions, "runtime budget exhausted", path.toList())
 
-            val path = frames.map { it.screenId }.toSet() + observation.screenId
-            val decision = deliberator.choose(observation, goal, path)
+            val visited = frames.map { it.screenId }.toSet() + observation.screenId
+            val decision = deliberator.choose(observation, goal, visited)
             val action = decision.action
             if (action == null) {
-                if (!decision.shouldBacktrack) return AgentRunResult(AgentStatus.ABSTAINED, cycles, actions, decision.reason)
+                if (!decision.shouldBacktrack) return AgentRunResult(AgentStatus.ABSTAINED, cycles, actions, decision.reason, path.toList())
                 val failed = frames.removeLastOrNull()
-                    ?: return AgentRunResult(AgentStatus.EXHAUSTED, cycles, actions, decision.reason)
+                    ?: return AgentRunResult(AgentStatus.EXHAUSTED, cycles, actions, decision.reason, path.toList())
                 experience.markDeadEnd(failed.screenId, failed.actionId)
+                path.removeLastOrNull()
                 val receipt = device.back(); cycles++; actions += "back"
-                if (!receipt.accepted) return AgentRunResult(AgentStatus.DEVICE_REJECTED, cycles, actions, receipt.detail)
+                if (!receipt.accepted) return AgentRunResult(AgentStatus.DEVICE_REJECTED, cycles, actions, receipt.detail, path.toList())
                 observation = device.observe(); continue
             }
 
@@ -204,8 +226,16 @@ class AutonomousAgent(
             val progressed = after.screenId != before.screenId || after.facts != before.facts
             experience.record(TransitionExperience(before.screenId, action.id, after.screenId, progressed,
                 before.packageName, before.appVersion, confidence = decision.confidence))
-            if (!progressed || after.screenId in path) experience.markDeadEnd(before.screenId, action.id)
-            else frames.addLast(Frame(before.screenId, action.id))
+            if (!progressed || after.screenId in visited) experience.markDeadEnd(before.screenId, action.id)
+            else {
+                frames.addLast(Frame(before.screenId, action.id))
+                path += AgentTransition(
+                    fromScreenId = before.screenId,
+                    toScreenId = after.screenId,
+                    action = action,
+                    factsGained = after.facts - before.facts
+                )
+            }
             observation = after
         }
     }

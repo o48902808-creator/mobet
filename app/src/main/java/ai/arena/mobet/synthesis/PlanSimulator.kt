@@ -1,4 +1,4 @@
-package ai.arena.mobet.planner
+package ai.arena.mobet.synthesis
 
 import ai.arena.mobet.agent.FuzzyText
 import ai.arena.mobet.automation.ControlFlow

@@ -5,6 +5,7 @@ import ai.arena.mobet.automation.MobetAccessibilityService
 import ai.arena.mobet.automation.PresenceLauncher
 import ai.arena.mobet.automation.RunReminder
 import ai.arena.mobet.automation.Workflow
+import ai.arena.mobet.automation.WorkflowDocument
 import ai.arena.mobet.automation.WorkflowTransfer
 import ai.arena.mobet.audit.AuditLedger
 import ai.arena.mobet.audit.LedgerBuildIdentity
@@ -18,6 +19,12 @@ import ai.arena.mobet.provenance.BuildIntegrityReport
 import ai.arena.mobet.provenance.ProvenanceVerification
 import ai.arena.mobet.provenance.SigstoreProvenance
 import ai.arena.mobet.security.SecretStore
+import ai.arena.mobet.synthesis.PlanQuality
+import ai.arena.mobet.synthesis.TraceSynthesizer
+import ai.arena.mobet.ui.CommandPalette
+import ai.arena.mobet.ui.CommandPalette.Command
+import ai.arena.mobet.ui.GenerationController
+import ai.arena.mobet.ui.GenerationHost
 import ai.arena.mobet.ui.JsonErrorLocator
 import ai.arena.mobet.ui.JsonHighlighter
 import ai.arena.mobet.ui.MobetUi
@@ -41,11 +48,14 @@ import android.text.method.ScrollingMovementMethod
 import android.view.View
 import android.view.WindowManager
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.AccessibilityDelegateCompat
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.view.ViewCompat
@@ -77,8 +87,23 @@ import java.util.Locale
  * cramped alert dialogs, and every transient message is a snackbar plus a persistent entry in
  * the activity log so nothing is lost when a toast disappears.
  */
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), GenerationHost {
 
+    /**
+     * Workflow generation lives in its own controller (docs/WORKFLOW_GENERATION.md); the activity
+     * owns views and lifecycle, and exposes only the narrow [GenerationHost] surface to it.
+     */
+    private val generation by lazy { GenerationController(this) }
+
+    override val activity: AppCompatActivity get() = this
+    override fun currentSource(): String = editor.text?.toString().orEmpty()
+    override fun replaceSource(json: String) = editor.setText(json)
+    override fun status(message: String, tone: Tone) = showStatus(message, tone)
+
+    private lateinit var onboardingCard: View
+    private lateinit var onboardingStepOne: TextView
+    private lateinit var onboardingStepTwo: TextView
+    private lateinit var onboardingStepThree: TextView
     private lateinit var serviceState: TextView
     private lateinit var serviceDetail: TextView
     private lateinit var serviceDot: View
@@ -165,6 +190,7 @@ class MainActivity : AppCompatActivity() {
         bindViews()
         applyWindowInsets()
         wireActions()
+        applyAdaptiveWidth()
         configureMotion()
         loadWorkflowSource()
         if (savedInstanceState == null) playEntranceChoreography()
@@ -234,6 +260,15 @@ class MainActivity : AppCompatActivity() {
     private fun bindViews() {
         serviceCard = findViewById(R.id.serviceCard)
         workflowCard = findViewById(R.id.workflowCard)
+        onboardingCard = findViewById(R.id.onboardingCard)
+        onboardingStepOne = findViewById(R.id.onboardingStepOne)
+        onboardingStepTwo = findViewById(R.id.onboardingStepTwo)
+        onboardingStepThree = findViewById(R.id.onboardingStepThree)
+        findViewById<View>(R.id.onboardingDismiss).setOnClickListener {
+            getSharedPreferences("onboarding", MODE_PRIVATE).edit().putBoolean("done", true).apply()
+            onboardingCard.visibility = View.GONE
+            showStatus("Getting started hidden — the Help menu still explains each step", Tone.NEUTRAL)
+        }
         serviceState = findViewById(R.id.serviceState)
         serviceDetail = findViewById(R.id.serviceDetail)
         serviceDot = findViewById(R.id.serviceDot)
@@ -252,6 +287,7 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<MaterialToolbar>(R.id.toolbar).setOnMenuItemClickListener { item ->
             when (item.itemId) {
+                R.id.menu_palette -> { showCommandPalette(); true }
                 R.id.menu_help -> { showHelp(); true }
                 R.id.menu_export -> { exportLibrary(); true }
                 R.id.menu_import -> { importLibrary(); true }
@@ -261,6 +297,54 @@ class MainActivity : AppCompatActivity() {
                 else -> false
             }
         }
+    }
+
+    /**
+     * Every action in the app, searchable. The list mirrors the on-screen order so an empty query
+     * looks like the layout the user already knows.
+     */
+    private fun showCommandPalette() {
+        val serviceReady = MobetAccessibilityService.instance != null
+        val commands = buildList {
+            add(Command("Generate grounded plan", "Describe a goal in plain clauses", "synthesize goal ai create", R.drawable.ic_plan) { generation.showGoalPlanner() })
+            add(Command("Run goal autonomously", "Bounded agent run with live verification", "agent apex autonomous", R.drawable.ic_agent) { showAutonomousGoal() })
+            add(Command("Dry run", "Simulate the plan without touching the device", "simulate preview test", R.drawable.ic_dryrun) { generation.dryRunPlan() })
+            add(Command("Validate policy", "Check the plan against its policy and re-ground it", "check lint verify repair", R.drawable.ic_policy) { generation.validatePlan() })
+            add(Command("Edit steps", "Visual step builder over the same document", "builder visual form", R.drawable.ic_steps) { showStepBuilder() })
+            add(Command("Record taps", "Capture your own interactions as a draft plan", "capture trace learn", R.drawable.ic_record) { startRecorder() })
+            add(Command("Choose target app", "Point the plan at an installed package", "package app switch", R.drawable.ic_apps) { chooseTargetApp() })
+            add(Command("Save to library", "Store the current document under a name", "store keep name", R.drawable.ic_save) { saveToLibrary() })
+            add(Command("Load from library", "Open a saved workflow", "open restore browse", R.drawable.ic_library) { loadFromLibrary() })
+            add(Command("Secrets", "Manage values referenced as secret placeholders", "password credential vault", R.drawable.ic_secret) { manageSecrets() })
+            add(Command("Inspect screen", "List the accessibility nodes on the current screen", "elements nodes selectors", R.drawable.ic_inspect) { showInspector() })
+            add(Command("Diagnostics", "Environment, permissions and service health", "health debug status", R.drawable.ic_diagnostics) { showDiagnostics() })
+            add(Command("Captures", "Screenshots and OCR output you consented to", "screenshots ocr images", R.drawable.ic_captures) { showLatestCapture() })
+            add(Command("Audit ledger", "Tamper-evident record of what ran", "log history ledger", R.drawable.ic_ledger) { showAuditLedger() })
+            add(Command("Agent memory", "What the agent learned, and how to forget it", "experience learning forget", R.drawable.ic_memory) { showAgentMemory() })
+            add(Command("Reminders", "Scheduled prompts to run a saved workflow", "schedule alarm later", R.drawable.ic_diagnostics) { showReminders() })
+            add(Command("Export library", "Write a signed bundle of saved workflows", "bundle share backup", R.drawable.ic_save) { exportLibrary() })
+            add(Command("Import library", "Load a bundle after review", "bundle restore install", R.drawable.ic_library) { importLibrary() })
+            add(Command("Build integrity", "Verify this build's signing identity", "signature verify apk", R.drawable.ic_check) { showBuildIntegrity() })
+            add(Command("Verify provenance", "Check a capture's provenance record", "attest evidence chain", R.drawable.ic_check) { pickProvenance() })
+            add(Command("Help", "What Mobet is, and what it refuses to do", "about guide docs", R.drawable.ic_help) { showHelp() })
+            if (!serviceReady) {
+                add(0, Command("Enable automation service", "Required before anything can run", "accessibility permission setup", R.drawable.ic_accessibility) { openAccessibilitySettings() })
+            }
+        }
+        CommandPalette.show(this, commands)
+    }
+
+    /**
+     * Ctrl+K opens the palette, matching the convention of every editor this app's users already
+     * use, and giving hardware-keyboard and switch-access users a single entry point to
+     * everything.
+     */
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (keyCode == android.view.KeyEvent.KEYCODE_K && event?.isCtrlPressed == true) {
+            showCommandPalette()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     // ── Motion ───────────────────────────────────────────────────────────────
@@ -409,11 +493,41 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun openAccessibilitySettings() {
+        runCatching { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+            .onFailure { showStatus("Could not open Accessibility settings", Tone.DANGER) }
+    }
+
+    /**
+     * Caps the content column on large screens.
+     *
+     * A single adaptive layout is preferred to a `layout-sw600dp` copy of this 700-line file:
+     * a forked layout drifts from the original the first time either is edited, and every view id
+     * here is wired by name in Kotlin. Capping the column keeps line lengths readable on tablets
+     * and unfolded foldables without duplicating anything.
+     */
+    private fun applyAdaptiveWidth() {
+        val maxWidth = resources.getDimensionPixelSize(R.dimen.mobet_content_max_width)
+        if (maxWidth <= 0) return
+        val column = findViewById<View>(R.id.contentColumn)
+        column.viewTreeObserver.addOnGlobalLayoutListener(object :
+            android.view.ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                column.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                val parentWidth = (column.parent as? View)?.width ?: return
+                if (parentWidth > maxWidth) {
+                    column.layoutParams = (column.layoutParams as FrameLayout.LayoutParams).apply {
+                        width = maxWidth
+                        gravity = android.view.Gravity.CENTER_HORIZONTAL
+                    }
+                    column.requestLayout()
+                }
+            }
+        })
+    }
+
     private fun wireActions() {
-        findViewById<View>(R.id.openAccessibility).setOnClickListener {
-            runCatching { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-                .onFailure { showStatus("Could not open Accessibility settings", Tone.DANGER) }
-        }
+        findViewById<View>(R.id.openAccessibility).setOnClickListener { openAccessibilitySettings() }
         findViewById<View>(R.id.restrictedHelp).setOnClickListener { showRestrictedSettingsHelp() }
         findViewById<View>(R.id.formatJson).setOnClickListener { formatWorkflowJson() }
         findViewById<View>(R.id.expandEditor).setOnClickListener { showEditorFullScreen() }
@@ -423,15 +537,15 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.recordTaps).setOnClickListener { startRecorder() }
         findViewById<View>(R.id.chooseTarget).setOnClickListener { chooseTargetApp() }
         findViewById<View>(R.id.editSteps).setOnClickListener { showStepBuilder() }
-        findViewById<View>(R.id.generatePlan).setOnClickListener { showGoalPlanner() }
+        findViewById<View>(R.id.generatePlan).setOnClickListener { generation.showGoalPlanner() }
         findViewById<View>(R.id.runGoal).setOnClickListener { showAutonomousGoal() }
-        findViewById<View>(R.id.dryRun).setOnClickListener { dryRunPlan() }
+        findViewById<View>(R.id.dryRun).setOnClickListener { generation.dryRunPlan() }
         findViewById<View>(R.id.inspectScreen).setOnClickListener { showInspector() }
         findViewById<View>(R.id.showDiagnostics).setOnClickListener { showDiagnostics() }
         findViewById<View>(R.id.showCaptures).setOnClickListener { showLatestCapture() }
         findViewById<View>(R.id.showAudit).setOnClickListener { showAuditLedger() }
         findViewById<View>(R.id.showMemory).setOnClickListener { showAgentMemory() }
-        findViewById<View>(R.id.validatePolicy).setOnClickListener { validatePlan() }
+        findViewById<View>(R.id.validatePolicy).setOnClickListener { generation.validatePlan() }
         // The two controls with real-world consequences get tactile confirmation.
         findViewById<View>(R.id.runWorkflow).setOnClickListener {
             it.haptic(confirming = true)
@@ -490,35 +604,43 @@ class MainActivity : AppCompatActivity() {
     private fun refreshWorkflowSummary() {
         workflowSummary.removeAllViews()
         val source = editor.text?.toString().orEmpty()
-        if (source.isBlank()) return
-        val parsed = runCatching { Workflow.parse(source) }
-        val workflow = parsed.getOrNull()
-        if (workflow == null) {
+        val summary = WorkflowDocument.summarize(source) ?: return
+        val parseError = summary.parseError
+        if (parseError != null) {
             // Point at the breakage instead of just naming it: org.json reports a character
             // offset, the locator turns it into a line/column, and tapping the chip drops the
             // editor caret exactly there. Semantic errors carry no offset, so they fall back
             // to the message head.
-            val errorMessage = parsed.exceptionOrNull()?.message
-            val location = JsonErrorLocator.locate(source, errorMessage)
+            val location = JsonErrorLocator.locate(source, parseError)
             val label = "Invalid JSON" +
                 (location?.let { " · line ${it.line}, col ${it.column}" }
-                    ?: errorMessage?.let { " · ${it.lineSequence().first().take(48)}" }.orEmpty())
+                    ?: " · ${parseError.lineSequence().first().take(48)}")
             addChip(label, Tone.DANGER, R.drawable.ic_warning) {
                 location?.let {
                     editor.requestFocus()
                     editor.setSelection(it.offset)
                     flashErrorAt(it.offset)
                 }
-                showStatus("Invalid JSON: ${errorMessage ?: "parse error"}", Tone.DANGER)
+                showStatus("Invalid JSON: $parseError", Tone.DANGER)
             }
             return
         }
-        workflow.packageName?.let { addChip(it.substringAfterLast('.'), Tone.NEUTRAL) }
-        addChip("${workflow.steps.size}/${workflow.policy.maxActions} steps", Tone.NEUTRAL)
-        addChip("${workflow.policy.maxRuntimeMs / 1000}s budget", Tone.NEUTRAL)
-        if (workflow.policy.allowVisualFallbacks) addChip("Visual fallback", Tone.WARNING)
-        if (workflow.policy.allowSelfHealing) addChip("Self-healing", Tone.NEUTRAL)
-        val violations = runCatching { PlanValidator.validate(workflow) }.getOrDefault(emptyList())
+        summary.packageName?.let { addChip(it.substringAfterLast('.'), Tone.NEUTRAL) }
+        addChip("${summary.stepCount}/${summary.maxActions} steps", Tone.NEUTRAL)
+        addChip("${summary.runtimeSeconds}s budget", Tone.NEUTRAL)
+        if (summary.visualFallbacks) addChip("Visual fallback", Tone.WARNING)
+        if (summary.selfHealing) addChip("Self-healing", Tone.NEUTRAL)
+        summary.quality?.let { quality ->
+            // The robustness grade belongs where authoring happens: "no step verifies its result"
+            // is most useful while the plan is being written, not after it fails.
+            val tone = when {
+                quality.score >= 75 -> Tone.SUCCESS
+                quality.score >= 50 -> Tone.NEUTRAL
+                else -> Tone.WARNING
+            }
+            addChip("Quality ${quality.grade} · ${quality.score}", tone) { generation.showQualityReport(quality) }
+        }
+        val violations = summary.violations
         if (violations.isEmpty()) {
             addChip("Policy OK", Tone.SUCCESS, R.drawable.ic_check)
         } else {
@@ -527,18 +649,45 @@ class MainActivity : AppCompatActivity() {
             addChip(
                 "${violations.size} policy issue${if (violations.size == 1) "" else "s"}",
                 Tone.DANGER, R.drawable.ic_warning
-            ) { validatePlan() }
+            ) { generation.validatePlan() }
         }
     }
 
+    /**
+     * Summary chips. Informational chips stay compact, but an *interactive* chip is a control and
+     * gets the 48dp minimum touch target Android requires, a hint that it can be tapped, and an
+     * accessibility action label so screen readers announce it as more than a status word.
+     */
     private fun addChip(label: String, tone: Tone, icon: Int? = null, onClick: (() -> Unit)? = null) {
+        val interactive = onClick != null
         val chip = Chip(this).apply {
             text = label
-            isClickable = onClick != null
+            isClickable = interactive
+            isFocusable = interactive
             isCheckable = false
             if (onClick != null) setOnClickListener { onClick() }
-            chipMinHeight = dp(28).toFloat()
-            setEnsureMinTouchTargetSize(false)
+            chipMinHeight = dp(if (interactive) 32 else 28).toFloat()
+            // Material expands the *touchable* area to 48dp without growing the chip visually.
+            setEnsureMinTouchTargetSize(interactive)
+            if (interactive) {
+                contentDescription = "$label. Double tap for details."
+                ViewCompat.setAccessibilityDelegate(this, object : AccessibilityDelegateCompat() {
+                    override fun onInitializeAccessibilityNodeInfo(
+                        host: View,
+                        info: AccessibilityNodeInfoCompat
+                    ) {
+                        super.onInitializeAccessibilityNodeInfo(host, info)
+                        info.addAction(
+                            AccessibilityNodeInfoCompat.AccessibilityActionCompat(
+                                AccessibilityNodeInfoCompat.ACTION_CLICK,
+                                getString(R.string.action_show_details)
+                            )
+                        )
+                    }
+                })
+            } else {
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            }
             textSize = 11f
             val color = when (tone) {
                 Tone.SUCCESS -> ContextCompat.getColor(this@MainActivity, R.color.mobet_success)
@@ -882,6 +1031,7 @@ class MainActivity : AppCompatActivity() {
         val history = service?.diagnosticHistory().orEmpty()
         val sheet = MobetUi.ReportSheet(this)
             .title("Execution diagnostics", R.drawable.ic_diagnostics)
+            .exportable("Mobet diagnostics")
             .subtitle(if (history.isEmpty()) null else "${history.size} recent events")
         if (history.isEmpty()) {
             sheet.empty(
@@ -911,6 +1061,7 @@ class MainActivity : AppCompatActivity() {
 
         val sheet = MobetUi.ReportSheet(this)
             .title("Audit ledger", R.drawable.ic_ledger)
+            .exportable("Mobet audit ledger")
             .subtitle("Tamper-evident SHA-256 hash chain")
 
         if (entries.isEmpty()) {
@@ -1422,85 +1573,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showGoalPlanner() {
-        val snapshot = MobetAccessibilityService.instance?.latestSnapshot()
-        if (snapshot == null || snapshot.elements.isEmpty()) {
-            showStatus("Visit the target app first so the goal can be grounded in its screen", Tone.WARNING)
-            return
-        }
-        val input = MobetUi.Field(
-            this,
-            "Goal",
-            "Example: tap “Network & internet” then wait for “Internet”",
-            lines = 3
-        )
-        MobetUi.dialog(this)
-            .setTitle("Generate grounded plan")
-            .setIcon(R.drawable.ic_plan)
-            .setMessage(
-                "Target: ${snapshot.packageName}\n" +
-                    "Only elements verified on the captured screen can be planned."
-            )
-            .setView(MobetUi.formContainer(this, input.layout))
-            .setPositiveButton("Generate") { _, _ ->
-                ai.arena.mobet.planner.GoalPlanner.generate(input.value, snapshot)
-                    .onSuccess { plan ->
-                        editor.setText(plan)
-                        showStatus("Plan generated and policy-validated — review before running", Tone.SUCCESS)
-                    }
-                    .onFailure { showStatus("Planner rejected goal: ${it.message}", Tone.DANGER) }
-            }
-            .setNegativeButton(R.string.action_cancel, null)
-            .show()
-    }
-
-    private fun dryRunPlan() {
-        try {
-            val workflow = Workflow.parse(editor.text.toString())
-            val snapshot = MobetAccessibilityService.instance?.latestSnapshot()
-            val report = ai.arena.mobet.planner.PlanSimulator.simulate(workflow, snapshot)
-            MobetUi.ReportSheet(this)
-                .title("Dry run", R.drawable.ic_dryrun)
-                .subtitle("Simulated against the last snapshot — the device is not touched")
-                .monospace(report)
-                .action(getString(R.string.action_close))
-                .show()
-        } catch (error: Exception) {
-            showStatus("Invalid workflow: ${error.message}", Tone.DANGER)
-        }
-    }
-
-    private fun validatePlan() {
-        try {
-            val workflow = Workflow.parse(editor.text.toString())
-            val violations = PlanValidator.validate(workflow)
-            val sheet = MobetUi.ReportSheet(this).title("Policy validation", R.drawable.ic_policy)
-            if (violations.isEmpty()) {
-                sheet.banner("✔ Approved by policy", Tone.SUCCESS)
-                    .monospace(
-                        "Target      ${workflow.packageName}\n" +
-                            "Actions     ${workflow.steps.size} / ${workflow.policy.maxActions}\n" +
-                            "Runtime     ${workflow.policy.maxRuntimeMs} ms\n" +
-                            "Visual      ${if (workflow.policy.allowVisualFallbacks) "allowed" else "blocked"}\n" +
-                            "Self-heal   ${if (workflow.policy.allowSelfHealing) "allowed" else "blocked"}"
-                    )
-            } else {
-                sheet.banner("✖ Rejected — ${violations.size} violation${if (violations.size == 1) "" else "s"}", Tone.DANGER)
-                    .rows(violations.map { violation ->
-                        Row(
-                            title = violation.message,
-                            subtitle = violation.step?.let { "Step $it" } ?: "Plan level",
-                            icon = R.drawable.ic_warning,
-                            showChevron = false
-                        )
-                    })
-            }
-            sheet.action(getString(R.string.action_close)).show()
-        } catch (error: Exception) {
-            showStatus("Invalid workflow: ${error.message}", Tone.DANGER)
-        }
-    }
-
     // ── Library ──────────────────────────────────────────────────────────────
 
     private fun saveToLibrary() {
@@ -1609,20 +1681,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyTargetPackage(target: String, label: String) {
         try {
-            val root = JSONObject(editor.text.toString())
-            val previous = root.optString("package").takeIf { it.isNotBlank() }
-            root.put("package", target)
-            val policy = root.optJSONObject("policy") ?: JSONObject().also { root.put("policy", it) }
-            val allowed = policy.optJSONArray("allowedPackages")
-            val packages = linkedSetOf<String>()
-            if (allowed != null) {
-                for (i in 0 until allowed.length()) packages.add(allowed.getString(i))
-            }
-            // Drop the package we are replacing, but preserve any additional launch targets.
-            if (previous != null) packages.remove(previous)
-            packages.add(target)
-            policy.put("allowedPackages", JSONArray(packages.toList()))
-            editor.setText(root.toString(2))
+            editor.setText(WorkflowDocument.retarget(editor.text.toString(), target))
             showStatus("Target set to $label ($target)", Tone.SUCCESS)
         } catch (error: Exception) {
             showStatus("Could not set target: ${error.message}", Tone.DANGER)
@@ -1803,7 +1862,7 @@ class MainActivity : AppCompatActivity() {
      * being present to answer confirmations and hit Stop, so the alarm posts a notification
      * that opens the app with the workflow loaded — the user still presses Run.
      */
-    private fun scheduleReminder(name: String) {
+    override fun scheduleReminder(name: String) {
         val now = java.util.Calendar.getInstance()
         android.app.TimePickerDialog(
             this,
@@ -1913,23 +1972,23 @@ class MainActivity : AppCompatActivity() {
                 showStatus("Stopped. No recorded taps to import")
                 return
             }
-            val root = JSONObject(editor.text.toString())
-            val steps = root.optJSONArray("steps") ?: JSONArray().also { root.put("steps", it) }
-            for (i in 0 until recorded.length()) steps.put(recorded.getJSONObject(i))
-            // Point the workflow at the app the recording was captured in: set the target when
-            // the document does not already name one, and always widen the package allowlist.
+            // Preferred path: synthesize a *workflow* from the trace (duplicate events removed,
+            // scroll runs coalesced, waits inserted, risk confirmations added, policy validated)
+            // instead of pasting raw events that would replay against a half-loaded screen.
             if (target != null) {
-                if (root.optString("package").isBlank()) root.put("package", target)
-                val policy = root.optJSONObject("policy") ?: JSONObject().also { root.put("policy", it) }
-                val allowed = policy.optJSONArray("allowedPackages")
-                    ?: JSONArray().also { policy.put("allowedPackages", it) }
-                var alreadyAllowed = false
-                for (i in 0 until allowed.length()) {
-                    if (allowed.getString(i) == target) { alreadyAllowed = true; break }
+                val synthesized = TraceSynthesizer.synthesize(
+                    recorded = source,
+                    packageName = target,
+                    options = ai.arena.mobet.synthesis.TraceOptions(
+                        name = "Recorded in $target"
+                    )
+                )
+                if (synthesized.isSuccess) {
+                    generation.presentSynthesis(synthesized.getOrThrow())
+                    return
                 }
-                if (!alreadyAllowed) allowed.put(target)
             }
-            editor.setText(root.toString(2))
+            editor.setText(WorkflowDocument.appendSteps(editor.text.toString(), recorded, target))
             showStatus(
                 "Imported ${recorded.length()} recorded steps" +
                     if (target != null) " — target allowlist includes $target" else "",
@@ -2017,6 +2076,45 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.openAccessibility).visibility = setupVisibility
         findViewById<View>(R.id.restrictedHelp).visibility = setupVisibility
         findViewById<View>(R.id.runWorkflow).isEnabled = enabled
+        refreshOnboarding(enabled)
+    }
+
+    /**
+     * Three concrete first-run steps, each ticking itself off as its condition is met.
+     *
+     * A new install lands on a JSON editor and fourteen buttons, which says nothing about where to
+     * begin. The card states the order, then removes itself permanently once all three steps are
+     * satisfied (or the user dismisses it) — onboarding that expires instead of accumulating.
+     */
+    private fun refreshOnboarding(serviceEnabled: Boolean) {
+        val preferences = getSharedPreferences("onboarding", MODE_PRIVATE)
+        if (preferences.getBoolean("done", false)) {
+            onboardingCard.visibility = View.GONE
+            return
+        }
+        val snapshot = MobetAccessibilityService.instance?.latestSnapshot()
+        val sawTarget = preferences.getBoolean("saw_target", false) ||
+            (snapshot != null && snapshot.packageName != packageName && snapshot.elements.isNotEmpty())
+        if (sawTarget) preferences.edit().putBoolean("saw_target", true).apply()
+        val hasPlan = runCatching { Workflow.parse(currentSource()).steps.isNotEmpty() }.getOrDefault(false)
+
+        if (serviceEnabled && sawTarget && hasPlan) {
+            preferences.edit().putBoolean("done", true).apply()
+            onboardingCard.visibility = View.GONE
+            return
+        }
+        onboardingCard.visibility = View.VISIBLE
+        stepText(onboardingStepOne, 1, R.string.onboarding_step_service, serviceEnabled)
+        stepText(onboardingStepTwo, 2, R.string.onboarding_step_target, sawTarget)
+        stepText(onboardingStepThree, 3, R.string.onboarding_step_plan, hasPlan)
+    }
+
+    private fun stepText(view: TextView, number: Int, textRes: Int, done: Boolean) {
+        val label = getString(textRes)
+        view.text = if (done) "✓  $label" else "$number ·  $label"
+        view.alpha = if (done) 0.55f else 1f
+        // Sighted users read the tick; a screen reader needs the state spoken.
+        view.contentDescription = if (done) "Step $number complete: $label" else "Step $number: $label"
     }
 
     private fun isServiceEnabled(): Boolean {
@@ -2089,6 +2187,7 @@ class MainActivity : AppCompatActivity() {
                 ExecutionTimelineEvent.State.RECOVERING
             )
         )
+        if (event.state == ExecutionTimelineEvent.State.SUCCEEDED) generation.offerCrystallization()
     }
 
     private fun showBusy(busy: Boolean) {
@@ -2121,7 +2220,7 @@ class MainActivity : AppCompatActivity() {
      * and no version history, a mis-tap meant retyping it. The caller supplies a restore
      * closure; the snackbar keeps it alive for the duration of the bar.
      */
-    private fun reportUndoable(message: String, undo: () -> Unit) {
+    override fun reportUndoable(message: String, undo: () -> Unit) {
         appendLog(message)
         MobetUi.snack(this, message, Tone.SUCCESS, getString(R.string.action_undo)) {
             undo()

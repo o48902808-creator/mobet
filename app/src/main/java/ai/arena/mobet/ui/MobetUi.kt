@@ -122,7 +122,11 @@ object MobetUi {
                 ?.mutate()?.apply { setTint(ContextCompat.getColor(activity, container)) }
         }
 
+        /** Text added to the sheet, retained so [exportable] can copy or share exactly that. */
+        private val textBlocks = mutableListOf<CharSequence>()
+
         fun paragraph(text: CharSequence) = apply {
+            textBlocks += text
             body.addView(TextView(activity).apply {
                 this.text = text
                 setTextAppearance(R.style.TextAppearance_Mobet_Body)
@@ -132,6 +136,7 @@ object MobetUi {
 
         /** Monospaced block for logs, hashes and generated reports. */
         fun monospace(text: CharSequence) = apply {
+            textBlocks += text
             body.addView(TextView(activity).apply {
                 this.text = text
                 typeface = Typeface.MONOSPACE
@@ -196,7 +201,44 @@ object MobetUi {
             (button.layoutParams as? LinearLayout.LayoutParams)?.marginStart = activity.dp(8)
         }
 
+        /**
+         * Adds Copy and Share for the sheet's text content.
+         *
+         * Reports were previously read-only and transient: a diagnostics dump or an audit extract
+         * could be read on the phone and nowhere else, which is useless precisely when someone is
+         * trying to get help with a failure. Only text the sheet already displays is exported, and
+         * sharing goes through the system chooser, so the user picks the destination.
+         */
+        fun exportable(subject: CharSequence) = apply {
+            exportSubject = subject
+        }
+
+        private var exportSubject: CharSequence? = null
+
+        private fun exportText(): String = textBlocks.joinToString("\n\n").trim()
+
         fun show() {
+            val subject = exportSubject
+            if (subject != null && exportText().isNotBlank()) {
+                action(activity.getString(R.string.action_copy_report), dismissAfter = false) {
+                    val clipboard = activity.getSystemService(android.content.ClipboardManager::class.java)
+                    clipboard?.setPrimaryClip(
+                        android.content.ClipData.newPlainText(subject, exportText())
+                    )
+                    // Android 13+ shows its own copy confirmation; a second one would be noise.
+                    if (android.os.Build.VERSION.SDK_INT < 33) {
+                        snack(activity, activity.getString(R.string.report_copied), Tone.SUCCESS)
+                    }
+                }
+                action(activity.getString(R.string.action_share_report), dismissAfter = false) {
+                    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(android.content.Intent.EXTRA_SUBJECT, subject)
+                        putExtra(android.content.Intent.EXTRA_TEXT, exportText())
+                    }
+                    runCatching { activity.startActivity(android.content.Intent.createChooser(intent, subject)) }
+                }
+            }
             if (actions.childCount == 0) action(activity.getString(R.string.action_close))
             dialog.show()
         }

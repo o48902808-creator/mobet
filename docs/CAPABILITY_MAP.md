@@ -42,9 +42,9 @@ names the code that owns it so the map can be re-verified rather than trusted.
   confirm button disabled until the literal matches; service-side timeout and fail-closed
   behavior; denial path tested in the walkthrough and Espresso suite.
 
-### 1.4 Autonomous agent (`agent/…`, `LiveAndroidAgent`, `GoalPlanner`, `planner/`)
+### 1.4 Autonomous agent (`agent/…`, `LiveAndroidAgent`, `synthesis/`, `planner/`)
 
-- Deterministic goal compiler (`GoalPlanner`) grounded in the last accessibility snapshot;
+- Deterministic goal compiler (`synthesis/WorkflowSynthesizer`) grounded in the last accessibility snapshot;
   ungrounded clauses reject; risk-driven confirmations inserted through the same validator.
 - Hierarchical execution: `HierarchicalPlanner` + `HierarchicalExecutor` (subgoal completion
   requires observed evidence — explicit facts or a semantic screen transition — never the
