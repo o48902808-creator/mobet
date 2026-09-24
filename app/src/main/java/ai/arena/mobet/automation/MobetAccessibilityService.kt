@@ -3,9 +3,7 @@ package ai.arena.mobet.automation
 import ai.arena.mobet.MainActivity
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
-import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 
 class MobetAccessibilityService : AccessibilityService() {
@@ -52,11 +50,12 @@ class MobetAccessibilityService : AccessibilityService() {
 
         if (eventPackage != packageName && now - lastInspectionAt >= 700) {
             rootInActiveWindow?.let { root ->
+                val node = AccessibilityUiNode(root)
                 try {
-                    snapshot = ScreenInspector.inspect(root, eventPackage)
+                    snapshot = ScreenInspector.inspect(node, eventPackage)
                         .also(ai.arena.mobet.synthesis.SessionScreenMemory::remember)
                 }
-                finally { root.recycle() }
+                finally { node.release() }
                 lastInspectionAt = now
             }
         }
@@ -296,11 +295,18 @@ class MobetAccessibilityService : AccessibilityService() {
     fun latestSnapshot(): ScreenSnapshot? = snapshot
 
     /** Fresh snapshot for autonomous verification; node handles never cross this boundary. */
-    fun currentSnapshot(): ScreenSnapshot? {
-        val root = rootInActiveWindow ?: return snapshot
+    fun currentSnapshot(): ScreenSnapshot? = liveSnapshot() ?: snapshot
+
+    /** A strictly live snapshot for workflow recovery; unlike currentSnapshot it never falls back. */
+    internal fun liveSnapshot(): ScreenSnapshot? {
+        val root = rootInActiveWindow ?: return null
+        val pkg = root.packageName?.toString() ?: run {
+            root.recycle()
+            return null
+        }
+        val node = AccessibilityUiNode(root)
         return try {
-            val pkg = root.packageName?.toString() ?: return snapshot
-            ScreenInspector.inspect(root, pkg).also {
+            ScreenInspector.inspect(node, pkg).also {
                 if (pkg != packageName) {
                     snapshot = it
                     // Screens observed during a run feed the session graph too, so a later goal
@@ -308,7 +314,7 @@ class MobetAccessibilityService : AccessibilityService() {
                     ai.arena.mobet.synthesis.SessionScreenMemory.remember(it)
                 }
             }
-        } finally { root.recycle() }
+        } finally { node.release() }
     }
 
     fun appVersion(targetPackage: String): String? = try {
@@ -393,20 +399,14 @@ class MobetAccessibilityService : AccessibilityService() {
 
     fun clearWorldModel() = worldModel.clear()
 
-    internal fun root(): AccessibilityNodeInfo? = rootInActiveWindow
+    /** Returns a platform-neutral root; the runner never receives AccessibilityNodeInfo. */
+    internal fun root(): UiNode? = rootInActiveWindow?.let(::AccessibilityUiNode)
 
     internal fun launch(packageName: String): Boolean {
         val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return false
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         startActivity(intent)
         return true
-    }
-
-    internal fun setText(node: AccessibilityNodeInfo, value: String): Boolean {
-        val args = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
-        }
-        return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
 
     private fun emitTimeline(event: ExecutionTimelineEvent) {

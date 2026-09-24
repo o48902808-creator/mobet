@@ -1,8 +1,5 @@
 package ai.arena.mobet.automation
 
-import android.graphics.Rect
-import android.view.accessibility.AccessibilityNodeInfo
-
 data class InspectedElement(
     val label: String,
     val role: String,
@@ -20,28 +17,38 @@ data class ScreenSnapshot(
     val visibleLabels: Set<String> = emptySet()
 )
 
-/** Converts a live accessibility tree into a node-free diagnostic snapshot. */
+/**
+ * Converts a UiNode tree into a node-free diagnostic snapshot.
+ *
+ * The root is borrowed from the caller and is therefore not released here;
+ * every descendant created by [UiNode.children] is released after it has been
+ * visited. This works for both live adapters and no-op JVM fakes.
+ */
 object ScreenInspector {
-    fun inspect(root: AccessibilityNodeInfo, packageName: String): ScreenSnapshot {
+    fun inspect(root: UiNode, packageName: String): ScreenSnapshot {
         val nodes = mutableListOf<NodeData>()
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(AccessibilityNodeInfo.obtain(root))
-        while (queue.isNotEmpty() && nodes.size < 250) {
-            val node = queue.removeFirst()
-            val bounds = Rect().also(node::getBoundsInScreen)
-            val data = NodeData(
-                text = node.text?.toString()?.trim()?.takeIf(String::isNotBlank),
-                id = node.viewIdResourceName?.takeIf(String::isNotBlank),
-                description = node.contentDescription?.toString()?.trim()?.takeIf(String::isNotBlank),
-                role = node.className?.toString()?.substringAfterLast('.') ?: "View",
-                actionable = node.isClickable || node.isEditable || node.isScrollable || node.isCheckable,
-                bounds = bounds
-            )
-            if (data.actionable || data.text != null || data.description != null) nodes += data
-            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
-            node.recycle()
+        val queue = ArrayDeque<UiNode>()
+        queue.add(root)
+        try {
+            while (queue.isNotEmpty() && nodes.size < 250) {
+                val node = queue.removeFirst()
+                val data = NodeData(
+                    text = node.text,
+                    id = node.viewId,
+                    description = node.description,
+                    role = node.role,
+                    actionable = node.clickable || node.editable || node.scrollable || node.checkable,
+                    bounds = node.bounds
+                )
+                if (data.actionable || data.text != null || data.description != null) nodes += data
+                queue.addAll(node.children)
+                if (node !== root) node.release()
+            }
+        } finally {
+            // The size cap can leave a tail in the queue. No live handle should
+            // survive a snapshot, even when a provider throws halfway through.
+            queue.forEach { it.release() }
         }
-        queue.forEach(AccessibilityNodeInfo::recycle)
 
         val elements = nodes.filter { it.actionable }.mapNotNull { node ->
             val selector = when {
@@ -79,6 +86,6 @@ object ScreenInspector {
 
     private data class NodeData(
         val text: String?, val id: String?, val description: String?, val role: String,
-        val actionable: Boolean, val bounds: Rect
+        val actionable: Boolean, val bounds: UiBounds
     )
 }
