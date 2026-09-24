@@ -14,7 +14,7 @@ jobs:
     name: CodeQL Java and Kotlin
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: github/codeql-action/init@v4
@@ -47,7 +47,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       # Requires Dependency graph (and GitHub Advanced Security on private repos) to be enabled
