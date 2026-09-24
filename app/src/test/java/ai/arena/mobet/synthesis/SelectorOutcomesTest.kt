@@ -32,6 +32,8 @@ class SelectorOutcomesTest {
         SelectorOutcomes.recordSuccess(pkg, reliable)
         assertEquals(0.0, SelectorOutcomes.adjustment(pkg, reliable), 1e-9)
         SelectorOutcomes.recordSuccess(pkg, reliable)
+        // Exactly at the threshold: decay makes the total marginally under two, which must still
+        // count (see OBSERVATION_EPSILON).
         assertTrue(SelectorOutcomes.adjustment(pkg, reliable) > 0.0)
     }
 

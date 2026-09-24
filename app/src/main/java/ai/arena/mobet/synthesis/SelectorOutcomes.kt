@@ -44,6 +44,15 @@ object SelectorOutcomes : GroundingPriors {
     /** Observations required before history influences ranking at all. */
     const val MIN_OBSERVATIONS = 2
 
+    /**
+     * Comparison slack for [MIN_OBSERVATIONS].
+     *
+     * Weights are decayed continuously, so two observations recorded milliseconds apart total
+     * 1.999999… rather than exactly 2. Comparing fractional weights to an integer threshold would
+     * make the threshold unreachable by construction.
+     */
+    private const val OBSERVATION_EPSILON = 1e-3
+
     /** Weight halves every this many days, so stale evidence fades instead of ruling forever. */
     const val HALF_LIFE_DAYS = 30.0
 
@@ -138,7 +147,7 @@ object SelectorOutcomes : GroundingPriors {
     @Synchronized
     override fun adjustment(packageName: String?, selector: SelectorSpec): Double {
         val outcome = stats[key(packageName, selector)] ?: return 0.0
-        if (outcome.total < MIN_OBSERVATIONS) return 0.0
+        if (outcome.total < MIN_OBSERVATIONS - OBSERVATION_EPSILON) return 0.0
         val ratio = (outcome.successes - outcome.failures) / outcome.total
         return ratio * GroundingPriors.MAX_ADJUSTMENT
     }
