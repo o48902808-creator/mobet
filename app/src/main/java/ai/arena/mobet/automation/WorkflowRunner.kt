@@ -9,10 +9,6 @@ import ai.arena.mobet.policy.RiskEngine
 import ai.arena.mobet.synthesis.SelectorOutcomes
 import ai.arena.mobet.policy.RiskTier
 import ai.arena.mobet.security.SecretStore
-import android.os.Handler
-import android.os.Looper
-import android.os.SystemClock
-import android.view.accessibility.AccessibilityNodeInfo
 
 /**
  * Sequential observe–act state machine with runtime safety rails:
@@ -30,9 +26,13 @@ class WorkflowRunner(
     private val onFinished: ((Boolean, String) -> Unit)? = null,
     private val launchTarget: Boolean = true,
     private val enforcePackageAtFirstStep: Boolean = false,
-    private val emitTimeline: (ExecutionTimelineEvent) -> Unit = {}
+    private val emitTimeline: (ExecutionTimelineEvent) -> Unit = {},
+    /**
+     * Time and deferral. Defaults to the main looper; a test supplies a deterministic scheduler
+     * so a whole plan can be executed without waiting for wall-clock delays.
+     */
+    private val scheduler: RunScheduler = HandlerScheduler()
 ) {
-    private val handler = Handler(Looper.getMainLooper())
     private val secrets = SecretStore(service)
     private val worldModel = WorldModel(service)
     private val agentMemory = ai.arena.mobet.agent.PersistentExperienceStore(service)
@@ -128,7 +128,7 @@ class WorkflowRunner(
             return
         }
         controlFlow = ControlFlow(value.steps)
-        startedAt = SystemClock.uptimeMillis()
+        startedAt = scheduler.now()
         timeline(ExecutionTimelineEvent.State.PLANNING)
         val elevated = value.steps.count { riskOf(it, value.variables).tier >= RiskTier.ELEVATED }
         log(
@@ -139,14 +139,14 @@ class WorkflowRunner(
             finish("Could not launch ${value.packageName}")
             return
         }
-        handler.postDelayed(::executeCurrent, 700)
+        scheduler.post(700) { executeCurrent() }
     }
 
     fun cancel(reason: String) {
         if (cancelled) return
         cancelled = true
         awaitingConfirmation = false
-        handler.removeCallbacksAndMessages(null)
+        scheduler.cancelAll()
         val safe = redact(reason)
         resolvedSecrets.clear()
         emitLog(safe)
@@ -178,7 +178,7 @@ class WorkflowRunner(
     private fun executeCurrent() {
         if (cancelled) return
         val flow = workflow ?: return
-        if (SystemClock.uptimeMillis() - startedAt > flow.policy.maxRuntimeMs) {
+        if (scheduler.now() - startedAt > flow.policy.maxRuntimeMs) {
             finish("Runtime budget exceeded (${flow.policy.maxRuntimeMs} ms)")
             return
         }
@@ -301,11 +301,11 @@ class WorkflowRunner(
             "tryalternates" -> {
                 // First-match selector fallback, probed synchronously on the settled screen:
                 // authors place a wait before this step when settling is required.
-                val root = service.root()
+                val root = rootNode()
                 if (root == null) {
                     finish("tryAlternates: screen unavailable")
                 } else {
-                    var chosen: AccessibilityNodeInfo? = null
+                    var chosen: UiNode? = null
                     var chosenIndex = -1
                     var deadEndsSkipped = 0
                     for (i in step.options.indices) {
@@ -329,7 +329,7 @@ class WorkflowRunner(
                         }
                     }
                     if (chosen == null) {
-                        root.recycle()
+                        root.release()
                         val tried = step.options.joinToString(", ") { serialize(it) }
                         val deadNote = if (deadEndsSkipped > 0) " ($deadEndsSkipped skipped as recorded dead ends)" else ""
                         finish("tryAlternates: none of ${step.options.size} options matched$deadNote ($tried)")
@@ -338,8 +338,8 @@ class WorkflowRunner(
                         val ok = try {
                             click(chosen)
                         } finally {
-                            chosen.recycle()
-                            root.recycle()
+                            chosen.release()
+                            root.release()
                         }
                         if (ok) advance(step.delayMs) else finish("tryAlternates: tap failed")
                     }
@@ -363,14 +363,11 @@ class WorkflowRunner(
                     recovery = "Waiting for ${if (hardened) "typed " else ""}user confirmation"
                 )
                 val generation = ++confirmationGeneration
-                handler.postDelayed(
-                    {
-                        if (awaitingConfirmation && confirmationGeneration == generation && !cancelled) {
-                            finish("Confirmation timed out — action denied")
-                        }
-                    },
-                    CONFIRM_TIMEOUT_MS
-                )
+                scheduler.post(CONFIRM_TIMEOUT_MS) {
+                    if (awaitingConfirmation && confirmationGeneration == generation && !cancelled) {
+                        finish("Confirmation timed out — action denied")
+                    }
+                }
                 service.requestConfirmation(step.message ?: "Allow the next workflow action?", hardened)
             }
             "tappoint", "swipe" -> {
@@ -412,12 +409,10 @@ class WorkflowRunner(
             "wait" -> seek(step, requireAction = false)
             "tap" -> seek(step, requireAction = true) { click(it) }
             "fill" -> seek(step, requireAction = true) { node ->
-                node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                service.setText(node, step.value.orEmpty())
+                node.performFocus()
+                node.setText(step.value.orEmpty())
             }
-            "scroll" -> seek(step, requireAction = true) { node ->
-                node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
-            }
+            "scroll" -> seek(step, requireAction = true) { node -> node.performScrollForward() }
             else -> finish("Unknown action: ${step.action}")
         }
     }
@@ -600,8 +595,8 @@ class WorkflowRunner(
         )
     }
 
-    private fun seek(step: Step, requireAction: Boolean, retry: Int = 0, action: (AccessibilityNodeInfo) -> Boolean = { true }) {
-        val started = SystemClock.uptimeMillis()
+    private fun seek(step: Step, requireAction: Boolean, retry: Int = 0, action: (UiNode) -> Boolean = { true }) {
+        val started = scheduler.now()
         fun attempt() {
             if (cancelled) return
             // The runtime budget is also checked between steps in executeCurrent, but this seek
@@ -609,23 +604,23 @@ class WorkflowRunner(
             // and retries=10 keeps re-entering for over ten minutes, even against a 5s budget.
             // Enforce the hard rail here as well so no step window can stretch a run past it.
             val flow = workflow ?: return
-            if (SystemClock.uptimeMillis() - startedAt > flow.policy.maxRuntimeMs) {
+            if (scheduler.now() - startedAt > flow.policy.maxRuntimeMs) {
                 finish("Runtime budget exceeded (${flow.policy.maxRuntimeMs} ms)")
                 return
             }
-            val node = find(service.root(), step.selector)
+            val node = find(rootNode(), step.selector)
             if (node != null) {
                 // Execution feedback: this selector really resolved on this device, in this app
                 // version. Generation consults the tally as a bounded ranking tie-break so future
                 // plans prefer selectors with a track record (docs/WORKFLOW_GENERATION.md).
                 noteSelectorOutcome(step, resolved = true)
-                val ok = try { action(node) } finally { node.recycle() }
+                val ok = try { action(node) } finally { node.release() }
                 if (ok || !requireAction) advance(step.delayMs)
                 else retryOrFail(step, requireAction, action, retry, "Action failed")
-            } else if (SystemClock.uptimeMillis() - started >= step.timeoutMs) {
+            } else if (scheduler.now() - started >= step.timeoutMs) {
                 noteSelectorOutcome(step, resolved = false)
                 retryOrFail(step, requireAction, action, retry, "Timed out")
-            } else handler.postDelayed(::attempt, 250)
+            } else scheduler.post(250) { attempt() }
         }
         attempt()
     }
@@ -644,7 +639,7 @@ class WorkflowRunner(
         else SelectorOutcomes.recordFailure(target, spec)
     }
 
-    private fun retryOrFail(step: Step, requireAction: Boolean, action: (AccessibilityNodeInfo) -> Boolean, retry: Int, reason: String) {
+    private fun retryOrFail(step: Step, requireAction: Boolean, action: (UiNode) -> Boolean, retry: Int, reason: String) {
         if (retry < step.retries) {
             log("$reason; retry ${retry + 1}/${step.retries}")
             timeline(
@@ -653,12 +648,12 @@ class WorkflowRunner(
                 RiskEngine.assess(step),
                 recovery = "$reason · retry ${retry + 1}/${step.retries}"
             )
-            handler.postDelayed({ seek(step, requireAction, retry + 1, action) }, 500)
+            scheduler.post(500) { seek(step, requireAction, retry + 1, action) }
             return
         }
         val healed = tryHeal(step, reason)
         if (healed != null) {
-            handler.postDelayed({ seek(healed, requireAction, retry, action) }, 300)
+            scheduler.post(300) { seek(healed, requireAction, retry, action) }
             return
         }
         finish("$reason finding ${describe(step.selector)}")
@@ -702,41 +697,51 @@ class WorkflowRunner(
     }
 
     private fun exists(selector: Selector): Boolean {
-        val node = find(service.root(), selector) ?: return false
-        node.recycle()
+        val node = find(rootNode(), selector) ?: return false
+        node.release()
         return true
     }
 
-    private fun find(root: AccessibilityNodeInfo?, selector: Selector): AccessibilityNodeInfo? {
+    /** Breadth-first search for the first node satisfying [selector]; caller releases the result. */
+    private fun find(root: UiNode?, selector: Selector): UiNode? {
         root ?: return null
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        val queue = ArrayDeque<UiNode>()
         queue.add(root)
         while (queue.isNotEmpty()) {
             val node = queue.removeFirst()
-            val matches = (selector.text == null || node.text?.toString()?.contains(selector.text, true) == true) &&
-                (selector.viewId == null || node.viewIdResourceName == selector.viewId) &&
-                (selector.description == null || node.contentDescription?.toString()?.contains(selector.description, true) == true)
-            if (matches && selector != Selector()) {
-                queue.forEach { it.recycle() }
+            if (node.matches(selector)) {
+                queue.forEach { it.release() }
                 return node
             }
-            for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
-            node.recycle()
+            for (i in 0 until node.childCount) node.child(i)?.let { queue.add(it) }
+            node.release()
         }
         return null
     }
 
-    private fun click(original: AccessibilityNodeInfo): Boolean {
-        var node: AccessibilityNodeInfo? = AccessibilityNodeInfo.obtain(original)
+    /**
+     * Clicks the node, or the nearest clickable ancestor.
+     *
+     * Labels are frequently non-clickable children of the actual control, so a plan targeting the
+     * visible text would otherwise fail on perfectly ordinary layouts.
+     */
+    private fun click(target: UiNode): Boolean {
+        var node: UiNode? = target
         while (node != null) {
-            if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                node.recycle(); return true
+            if (node.isClickable && node.performClick()) {
+                // The caller owns `target`; every ancestor obtained here is ours to release.
+                if (node !== target) node.release()
+                return true
             }
-            val parent = node.parent
-            node.recycle(); node = parent
+            val parent = node.parent()
+            if (node !== target) node.release()
+            node = parent
         }
         return false
     }
+
+    /** The live screen root, as a backend-neutral node. */
+    private fun rootNode(): UiNode? = service.root()?.let(::AccessibilityUiNode)
 
     private fun complete(ok: Boolean, step: Step) {
         if (ok) advance(step.delayMs) else finish("${step.action} failed")
@@ -744,7 +749,7 @@ class WorkflowRunner(
 
     private fun advance(delay: Long) {
         index++
-        handler.postDelayed(::executeCurrent, delay)
+        scheduler.post(delay) { executeCurrent() }
     }
 
     private fun finish(message: String) {
@@ -752,7 +757,7 @@ class WorkflowRunner(
         SelectorOutcomes.flush()
         cancelled = true
         awaitingConfirmation = false
-        handler.removeCallbacksAndMessages(null)
+        scheduler.cancelAll()
         // Redact before clearing, otherwise the final message loses its protection.
         val safe = redact(message)
         resolvedSecrets.clear()
