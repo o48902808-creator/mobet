@@ -23,6 +23,8 @@ data class SynthesisOptions(
     val defaultRetries: Int = 1,
     val defaultTimeoutMs: Long = 5_000,
     val maxSteps: Int = 80,
+    /** Execution history consulted as a bounded ranking tie-break; [NoGroundingPriors] ignores it. */
+    val priors: GroundingPriors = SelectorOutcomes,
     /** Optional explicit workflow name; otherwise derived from the goal text. */
     val name: String? = null
 )
@@ -129,7 +131,7 @@ object WorkflowSynthesizer {
         }
 
         private fun emitTap(intent: TapIntent) {
-            when (val grounding = SnapshotGrounder.ground(intent.target, snapshot.elements)) {
+            when (val grounding = ground(intent.target, editableOnly = false)) {
                 is Grounding.Resolved -> {
                     val candidate = grounding.best
                     note(intent.source, candidate)
@@ -266,7 +268,7 @@ object WorkflowSynthesizer {
         // ── Helpers ──────────────────────────────────────────────────────────
 
         private fun resolve(target: String, source: String, editableOnly: Boolean): GroundedCandidate {
-            return when (val grounding = SnapshotGrounder.ground(target, snapshot.elements, editableOnly)) {
+            return when (val grounding = ground(target, editableOnly)) {
                 is Grounding.Resolved -> grounding.best.also { note(source, it) }
                 is Grounding.Ambiguous -> throw IllegalArgumentException(
                     ambiguityMessage(target, grounding.candidates)
@@ -277,11 +279,20 @@ object WorkflowSynthesizer {
             }
         }
 
+        private fun ground(target: String, editableOnly: Boolean): Grounding = SnapshotGrounder.ground(
+            target = target,
+            elements = snapshot.elements,
+            editableOnly = editableOnly,
+            packageName = snapshot.packageName,
+            priors = options.priors
+        )
+
         private fun note(source: String, candidate: GroundedCandidate) {
             notes += SynthesisNote(
                 "grounding",
                 "“${source.take(60)}” → ${candidate.selector} (${candidate.label}, " +
-                    "match ${(candidate.similarity * 100).toInt()}%, selector confidence ${candidate.confidence}%)"
+                    "match ${(candidate.similarity * 100).toInt()}%, selector confidence ${candidate.confidence}%" +
+                    (if (candidate.prior != 0.0) ", learned prior ${"%+.2f".format(candidate.prior)}" else "") + ")"
             )
         }
 

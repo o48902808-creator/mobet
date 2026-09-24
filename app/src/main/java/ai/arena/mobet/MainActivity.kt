@@ -19,6 +19,7 @@ import ai.arena.mobet.provenance.BuildIntegrityReport
 import ai.arena.mobet.provenance.ProvenanceVerification
 import ai.arena.mobet.provenance.SigstoreProvenance
 import ai.arena.mobet.security.SecretStore
+import ai.arena.mobet.synthesis.AgentCrystallizer
 import ai.arena.mobet.synthesis.PlanQuality
 import ai.arena.mobet.synthesis.SynthesizedWorkflow
 import ai.arena.mobet.synthesis.TraceSynthesizer
@@ -121,6 +122,8 @@ class MainActivity : AppCompatActivity() {
      * recorded workflow would be rejected until hand-edited.
      */
     private var recordingPackage: String? = null
+    /** Last autonomous run already offered for crystallization; prevents repeat prompts. */
+    private var crystallizedRun: ai.arena.mobet.agent.AgentRunResult? = null
 
     /**
      * Debounce for the live summary chips.
@@ -2144,6 +2147,23 @@ class MainActivity : AppCompatActivity() {
                 ExecutionTimelineEvent.State.RECOVERING
             )
         )
+        if (event.state == ExecutionTimelineEvent.State.SUCCEEDED) offerCrystallization()
+    }
+
+    /**
+     * A verified autonomous run knows a route that worked. Offer to turn it into a deterministic
+     * workflow so the next run is a replay instead of another exploration — reviewed, editable and
+     * subject to the same policy gate as anything else.
+     */
+    private fun offerCrystallization() {
+        val (run, goal) = MobetAccessibilityService.instance?.lastCrystallizableRun() ?: return
+        if (run === crystallizedRun) return
+        MobetUi.snack(this, "Autonomous goal verified — save the route as a workflow?", Tone.SUCCESS, "Save") {
+            crystallizedRun = run
+            AgentCrystallizer.crystallize(run, goal)
+                .onSuccess(::presentSynthesis)
+                .onFailure { showStatus("Cannot crystallize this run: ${it.message}", Tone.WARNING) }
+        }
     }
 
     private fun showBusy(busy: Boolean) {

@@ -6,6 +6,7 @@ import ai.arena.mobet.agent.WorldModel
 import ai.arena.mobet.policy.PlanValidator
 import ai.arena.mobet.policy.RiskAssessment
 import ai.arena.mobet.policy.RiskEngine
+import ai.arena.mobet.synthesis.SelectorOutcomes
 import ai.arena.mobet.policy.RiskTier
 import ai.arena.mobet.security.SecretStore
 import android.os.Handler
@@ -614,14 +615,33 @@ class WorkflowRunner(
             }
             val node = find(service.root(), step.selector)
             if (node != null) {
+                // Execution feedback: this selector really resolved on this device, in this app
+                // version. Generation consults the tally as a bounded ranking tie-break so future
+                // plans prefer selectors with a track record (docs/WORKFLOW_GENERATION.md).
+                noteSelectorOutcome(step, resolved = true)
                 val ok = try { action(node) } finally { node.recycle() }
                 if (ok || !requireAction) advance(step.delayMs)
                 else retryOrFail(step, requireAction, action, retry, "Action failed")
             } else if (SystemClock.uptimeMillis() - started >= step.timeoutMs) {
+                noteSelectorOutcome(step, resolved = false)
                 retryOrFail(step, requireAction, action, retry, "Timed out")
             } else handler.postDelayed(::attempt, 250)
         }
         attempt()
+    }
+
+    /**
+     * Records whether a selector resolved, keyed by package and selector identity only.
+     *
+     * No screen text, entered value or secret is retained, and the tally is advisory: it can move
+     * a future grounding candidate by at most ±0.05 score and can never admit a target that is
+     * not on screen.
+     */
+    private fun noteSelectorOutcome(step: Step, resolved: Boolean) {
+        val spec = SelectorOutcomes.specOf(step.selector) ?: return
+        val target = workflow?.packageName
+        if (resolved) SelectorOutcomes.recordSuccess(target, spec)
+        else SelectorOutcomes.recordFailure(target, spec)
     }
 
     private fun retryOrFail(step: Step, requireAction: Boolean, action: (AccessibilityNodeInfo) -> Boolean, retry: Int, reason: String) {

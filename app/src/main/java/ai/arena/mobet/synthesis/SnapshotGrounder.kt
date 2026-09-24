@@ -31,10 +31,12 @@ data class GroundedCandidate(
     /** Fuzzy similarity between the requested target and the on-screen label, 0..1. */
     val similarity: Double,
     /** Snapshot-reported selector confidence, 0..99 (lower when the selector matches many nodes). */
-    val confidence: Int
+    val confidence: Int,
+    /** Bounded learned adjustment from execution history; ±[GroundingPriors.MAX_ADJUSTMENT]. */
+    val prior: Double = 0.0
 ) {
-    /** Ranking score: similarity dominates, selector stability breaks ties. */
-    val score: Double get() = similarity * 0.9 + (confidence / 100.0) * 0.1
+    /** Ranking score: similarity dominates, selector stability and learned history break ties. */
+    val score: Double get() = similarity * 0.9 + (confidence / 100.0) * 0.1 + prior
 }
 
 sealed interface Grounding {
@@ -70,7 +72,9 @@ object SnapshotGrounder {
     fun ground(
         target: String,
         elements: List<InspectedElement>,
-        editableOnly: Boolean = false
+        editableOnly: Boolean = false,
+        packageName: String? = null,
+        priors: GroundingPriors = NoGroundingPriors
     ): Grounding {
         val pool = if (editableOnly) {
             elements.filter { it.role.contains("Edit", ignoreCase = true) }.ifEmpty { elements }
@@ -85,7 +89,12 @@ object SnapshotGrounder {
                     label = element.label,
                     role = element.role,
                     similarity = FuzzyText.similarity(target, element.label),
-                    confidence = element.confidence
+                    confidence = element.confidence,
+                    // Clamped defensively: a custom priors implementation cannot exceed the
+                    // documented ceiling even by accident.
+                    prior = priors.adjustment(packageName, selector).coerceIn(
+                        -GroundingPriors.MAX_ADJUSTMENT, GroundingPriors.MAX_ADJUSTMENT
+                    )
                 )
             }
             // Deterministic total order: score, then selector text, so identical inputs always

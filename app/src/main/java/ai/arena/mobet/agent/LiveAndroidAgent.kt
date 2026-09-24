@@ -91,6 +91,19 @@ class LiveAndroidAgent(
      */
     private var lastBelief: BeliefState = BeliefState(emptyList(), 1.0)
     private val frames = ArrayDeque<Pair<String, String>>()
+    /**
+     * Mirrors [frames]: the accepted, progress-making, non-backtracked route the agent is
+     * currently standing on. A verified run's route is what `synthesis/AgentCrystallizer` turns
+     * into a deterministic, re-runnable workflow, so the expensive exploration happens once.
+     */
+    private val pathTransitions = mutableListOf<AgentTransition>()
+    /** Route of the last run that verified its goal; null until one does. */
+    var lastSuccessfulRun: AgentRunResult? = null
+        private set
+
+    /** Goal of [lastSuccessfulRun]; both are set together or not at all. */
+    var lastSuccessfulGoal: AgentGoal? = null
+        private set
     private val recoveryAttempts = mutableMapOf<FailureKind, Int>()
     private val actionSnapshots = ArrayDeque<ActionSnapshot>()
 
@@ -139,7 +152,8 @@ class LiveAndroidAgent(
         deliberator = Deliberator(memory, assistant)
         cycles = 0; completionEvidenceHits = 0; ocrCheckInFlight = false; startedAt = android.os.SystemClock.uptimeMillis()
         runGeneration++; beliefTracker.clear(); lastBelief = BeliefState(emptyList(), 1.0)
-        stabilizer.reset(); frames.clear(); recoveryAttempts.clear(); actionSnapshots.clear(); cancelled = false
+        stabilizer.reset(); frames.clear(); pathTransitions.clear(); recoveryAttempts.clear()
+        actionSnapshots.clear(); cancelled = false
         checkpoints.start(value)
         service.showAutonomyNotification()
         val modelEngine = when {
@@ -261,6 +275,7 @@ class LiveAndroidAgent(
             val failed = frames.removeLastOrNull()
             if (failed == null) { finish(AgentStatus.EXHAUSTED, decision.reason); return }
             memory.markDeadEnd(failed.first, failed.second)
+            pathTransitions.removeLastOrNull()
             execute(observation, AgentAction("back", "Back", kind = AgentActionKind.BACK), true)
             return
         }
@@ -336,6 +351,12 @@ class LiveAndroidAgent(
                     if (after.screenId in frames.map { it.first }) memory.markDeadEnd(before.screenId, action.id)
                     else if (!backtrack) {
                         frames.addLast(before.screenId to action.id)
+                        pathTransitions += AgentTransition(
+                            fromScreenId = before.screenId,
+                            toScreenId = after.screenId,
+                            action = action,
+                            factsGained = after.facts - before.facts
+                        )
                         hierarchy?.progress(after.facts, observedTransition = true, actionLabel = action.label)?.let { progress ->
                             if (progress.completed) emit("Apex subgoal ${progress.index + 1}/${plan?.subgoals?.size} completed with verified evidence")
                         }
@@ -409,6 +430,21 @@ class LiveAndroidAgent(
     }
     private fun finish(status: AgentStatus, detail: String) {
         checkpoints.finish()
+        // Only a verified run is retained for crystallization: a route distilled from a run that
+        // never observed its completion evidence would encode a path to nowhere.
+        val crystallizable = status == AgentStatus.SUCCEEDED && pathTransitions.isNotEmpty()
+        if (crystallizable) lastSuccessfulGoal = goal
+        lastSuccessfulRun = if (crystallizable) {
+            AgentRunResult(
+                status = status,
+                cycles = cycles,
+                actions = pathTransitions.map { it.action.id },
+                explanation = detail,
+                successPath = pathTransitions.toList()
+            )
+        } else {
+            lastSuccessfulRun
+        }
         service.hideAutonomyNotification()
         cancelled = true; runGeneration++; handler.removeCallbacksAndMessages(null)
         timeline(

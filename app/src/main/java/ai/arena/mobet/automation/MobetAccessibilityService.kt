@@ -71,6 +71,16 @@ class MobetAccessibilityService : AccessibilityService() {
         runner = WorkflowRunner(this, ::emit, emitTimeline = ::emitTimeline).also { it.start(workflow) }
     }
 
+    /**
+     * The last autonomous run that verified its goal, paired with that goal, so the UI can offer
+     * to crystallize it into a deterministic workflow. Null until a run succeeds.
+     */
+    fun lastCrystallizableRun(): Pair<ai.arena.mobet.agent.AgentRunResult, ai.arena.mobet.agent.AgentGoal>? {
+        val run = liveAgent.lastSuccessfulRun ?: return null
+        val goal = liveAgent.lastSuccessfulGoal ?: return null
+        return run to goal
+    }
+
     fun startAutonomous(goal: ai.arena.mobet.agent.AgentGoal) {
         runner?.cancel("Replaced by autonomous run")
         liveAgent.start(goal)
