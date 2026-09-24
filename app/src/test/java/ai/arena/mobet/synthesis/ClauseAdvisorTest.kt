@@ -12,21 +12,32 @@ class ClauseAdvisorTest {
 
     @Test
     fun aFamiliarSynonymIsMappedToTheAcceptedVerb() {
-        val message = rejection("click \"Save\"")
-        assertTrue(message.contains("not a clause verb"))
-        assertTrue(message.contains("tap"))
+        // "swipe" is not in the grammar; "scroll" is.
+        val message = rejection("swipe \"Save\"")
+        assertTrue(message, message.contains("not a clause verb"))
+        assertTrue(message, message.contains("scroll"))
     }
 
     @Test
-    fun aSingleCharacterTypoIsRecognised() {
-        assertTrue(ClauseAdvisor.advise("tpa \"Save\"")!!.contains("Did you mean"))
+    fun verbsTheGrammarAlreadyAcceptsAreNotSecondGuessed() {
+        // These parse today; the advisor must never claim otherwise.
+        listOf("click \"Save\"", "enter \"Email\" with \"a\"", "check \"Saved\" appears")
+            .forEach { assertTrue("“$it” should parse", IntentGrammar.parse(it).isSuccess) }
+        // A clause that parses is never described as a wrong verb.
+        assertTrue(ClauseAdvisor.advise("tap \"Save\"")!!.contains("Accepted clause forms"))
+    }
+
+    @Test
+    fun aTranspositionIsRecognised() {
+        val advice = ClauseAdvisor.advise("tpa \"Save\"")!!
+        assertTrue(advice, advice.contains("Did you mean"))
+        assertTrue(advice, advice.contains("tap"))
+    }
+
+    @Test
+    fun aDroppedLetterIsRecognised() {
         assertTrue(ClauseAdvisor.advise("scrol")!!.contains("scroll"))
-    }
-
-    @Test
-    fun anUnquotedTargetIsShownQuoted() {
-        val advice = ClauseAdvisor.advise("tap Save")!!
-        assertTrue(advice.contains("tap \"Save\""))
+        assertTrue(ClauseAdvisor.advise("verfy \"Saved\"")!!.contains("verify"))
     }
 
     @Test
@@ -59,8 +70,14 @@ class ClauseAdvisorTest {
     }
 
     @Test
+    fun twoLetterFragmentsGetNoVerbGuess() {
+        // One edit relates almost any pair of very short words, so no verb is suggested.
+        assertTrue(ClauseAdvisor.advise("ta")!!.contains("Accepted clause forms"))
+    }
+
+    @Test
     fun guidanceDoesNotMakeABadClauseAcceptable() {
-        listOf("click \"Save\"", "tap Save", "wait 3", "fill \"Email\"").forEach { goal ->
+        listOf("swipe \"Save\"", "tpa \"Save\"", "wait 3", "fill \"Email\"").forEach { goal ->
             assertTrue("“$goal” must stay rejected", IntentGrammar.parse(goal).isFailure)
         }
     }

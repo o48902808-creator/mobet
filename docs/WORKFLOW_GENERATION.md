@@ -57,13 +57,23 @@ distinct on purpose:
 Ranking is a deterministic total order (score, then selector string), so identical goal +
 snapshot always yields byte-identical JSON.
 
+**Rejection guidance.** `ClauseAdvisor` appends one specific suggestion to a grammar rejection —
+unbalanced quotes, a delay without a unit, a fill without a value, a verb the grammar does not
+accept (`swipe` → `scroll`), or a one-edit typo including transpositions (`tpa` → `tap`). It is
+diagnostic only: it never repairs or re-interprets a clause, and it stays silent about verbs the
+grammar already accepts.
+
 **Multi-screen routes.** Real routes span screens, so grounding falls back to `SessionScreenMemory`
 — a bounded, in-process graph of screens this session has actually shown (12 per package, 8
 packages, keyed by structural identity, never written to disk). Memory grounding is strictly more
 conservative than live grounding: only an unambiguous resolution counts, it never crosses a package
 boundary, the live screen always wins, and the emitted step is *always* preceded by a `wait`, so a
 route that no longer holds fails as a named timeout instead of tapping blind. Every
-memory-grounded step says so in the report, with the age of the screen it came from. Pass
+memory-grounded step says so in the report, with the age of the screen it came from. Screens are
+linked by observed transitions, so candidates are searched in *route* order — the screens actually
+reached from wherever the plan currently stands, ranked by how often that transition was seen,
+before anything else by recency. When two screens of an app both hold a control with the same
+label, the reachable one wins. Pass
 `ScreenMemory.EMPTY` to restrict generation to the current screen.
 
 ### 3. Lowering and robustness (`WorkflowSynthesizer.kt`)
@@ -166,6 +176,14 @@ Selector values come from a foreign app, and `WorkflowRunner.expand` substitutes
 selector. Every construction path that copies a value from the screen — grounding, recorded
 traces, crystallization, repair — goes through `SelectorSpec.of`, which refuses template syntax,
 so such a control is simply not groundable and never reaches a document.
+
+## OCR as a diagnostic
+
+With the user's OCR consent, recognized text is passed to generation as `SynthesisOptions.ocrText`
+— strictly to *explain* failures, never as a target source. Recognized pixels carry no selector, so
+a step built from them could only be replayed through visual fallbacks. What the user gets instead
+is the distinction between "that control does not exist" and "that control is drawn but exposes no
+accessibility node", which have completely different fixes. No plan step is ever invented from OCR.
 
 ## Generation-time simulation
 

@@ -12,17 +12,27 @@ package ai.arena.mobet.synthesis
  */
 object ClauseAdvisor {
 
+    /**
+     * Verbs the grammar *already* accepts, so the advisor never second-guesses a clause that
+     * failed for some other reason. Kept in sync with the regexes in [IntentGrammar].
+     */
+    private val accepted = setOf(
+        "tap", "click", "press", "touch", "select", "choose", "open", "go", "navigate",
+        "fill", "enter", "type", "input", "set",
+        "verify", "expect", "assert", "check",
+        "wait", "pause", "delay", "find", "locate", "await",
+        "scroll", "repeat", "if", "back", "home", "launch", "start", "confirm", "ask", "prompt"
+    )
+
     /** Verbs users reach for that the grammar does not accept, and the accepted equivalent. */
     private val synonyms = mapOf(
-        "click" to "tap", "press" to "tap", "push" to "tap", "select" to "tap",
-        "choose" to "tap", "hit" to "tap", "touch" to "tap",
-        "type" to "fill", "enter" to "fill", "input" to "fill", "write" to "fill",
-        "set" to "fill", "put" to "fill",
-        "goto" to "open", "navigate" to "open", "visit" to "open", "launch" to "open",
-        "swipe" to "scroll", "slide" to "scroll",
-        "check" to "verify", "assert" to "verify", "ensure" to "verify", "expect" to "verify",
-        "pause" to "wait", "sleep" to "wait", "hold" to "wait",
-        "loop" to "repeat", "retry" to "repeat", "keep" to "repeat"
+        "hit" to "tap", "push" to "tap", "tick" to "tap", "activate" to "tap",
+        "write" to "fill", "put" to "fill", "paste" to "fill",
+        "goto" to "open", "visit" to "open", "launchapp" to "open",
+        "swipe" to "scroll", "slide" to "scroll", "flick" to "scroll",
+        "ensure" to "verify", "confirmthat" to "verify",
+        "sleep" to "wait", "hold" to "wait",
+        "loop" to "repeat", "retry" to "repeat", "keep" to "repeat", "while" to "repeat"
     )
 
     private val forms = listOf(
@@ -48,10 +58,9 @@ object ClauseAdvisor {
         if (trimmed.isEmpty()) return null
 
         unbalancedQuotes(trimmed)?.let { return it }
-        misspelledVerb(trimmed)?.let { return it }
-        missingQuotes(trimmed)?.let { return it }
         malformedDuration(trimmed)?.let { return it }
         incompleteFill(trimmed)?.let { return it }
+        misspelledVerb(trimmed)?.let { return it }
         return "Accepted clause forms: ${forms.joinToString("  ·  ")}"
     }
 
@@ -72,22 +81,16 @@ object ClauseAdvisor {
 
     private fun misspelledVerb(clause: String): String? {
         val firstWord = clause.substringBefore(' ').lowercase().trim('“', '”', '"', '.', ',')
-        synonyms[firstWord]?.let { accepted ->
-            return "“$firstWord” is not a clause verb — use “$accepted”, e.g. ${example(accepted)}."
+        if (firstWord.isEmpty()) return null
+        synonyms[firstWord]?.let { replacement ->
+            return "“$firstWord” is not a clause verb — use “$replacement”, e.g. ${example(replacement)}."
         }
-        // One-character typos of an accepted verb ("tpa", "fil", "scrol").
-        val accepted = setOf("tap", "open", "fill", "scroll", "wait", "verify", "if", "repeat", "back", "home")
-        val near = accepted.firstOrNull { it != firstWord && editDistanceWithin1(it, firstWord) } ?: return null
+        // An already-accepted verb failed for some other reason; guessing a different verb would
+        // send the user down the wrong path.
+        if (firstWord in accepted) return null
+        val suggestions = setOf("tap", "open", "fill", "scroll", "wait", "verify", "repeat", "back", "home")
+        val near = suggestions.firstOrNull { nearMiss(it, firstWord) } ?: return null
         return "Did you mean “$near”? e.g. ${example(near)}."
-    }
-
-    private fun missingQuotes(clause: String): String? {
-        val verb = clause.substringBefore(' ').lowercase()
-        if (verb !in setOf("tap", "open", "fill", "wait", "verify")) return null
-        if (clause.any { it == '"' || it == '“' }) return null
-        val target = clause.substringAfter(' ', "").trim()
-        if (target.isEmpty()) return "“$verb” needs a target: ${example(verb)}."
-        return "Targets must be quoted: try $verb \"$target\"."
     }
 
     private fun malformedDuration(clause: String): String? {
@@ -114,25 +117,37 @@ object ClauseAdvisor {
         else -> "$verb \"Save\""
     }
 
-    /** True when [candidate] is within one insertion, deletion or substitution of [accepted]. */
-    private fun editDistanceWithin1(accepted: String, candidate: String): Boolean {
-        if (candidate.isEmpty()) return false
-        if (kotlin.math.abs(accepted.length - candidate.length) > 1) return false
-        var i = 0
-        var j = 0
-        var edits = 0
-        while (i < accepted.length && j < candidate.length) {
-            if (accepted[i] == candidate[j]) {
-                i++; j++
-                continue
-            }
-            if (++edits > 1) return false
-            when {
-                accepted.length > candidate.length -> i++
-                accepted.length < candidate.length -> j++
-                else -> { i++; j++ }
+    /**
+     * Damerau-Levenshtein distance of 1 or less: one insertion, deletion, substitution, or the
+     * transposition of two adjacent characters. Transpositions matter because "tpa" for "tap" is
+     * the single commonest typing slip, and plain Levenshtein scores it as two edits.
+     */
+    private fun nearMiss(target: String, candidate: String): Boolean {
+        if (candidate.isEmpty() || candidate == target) return false
+        // Below three characters a single edit relates almost any two words, so a suggestion
+        // would be noise rather than help.
+        if (target.length < 3 || candidate.length < 3) return false
+        return damerauLevenshtein(target, candidate) <= 1
+    }
+
+    private fun damerauLevenshtein(a: String, b: String): Int {
+        if (kotlin.math.abs(a.length - b.length) > 1) return 2
+        val distance = Array(a.length + 1) { IntArray(b.length + 1) }
+        for (i in 0..a.length) distance[i][0] = i
+        for (j in 0..b.length) distance[0][j] = j
+        for (i in 1..a.length) {
+            for (j in 1..b.length) {
+                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
+                distance[i][j] = minOf(
+                    distance[i - 1][j] + 1,
+                    distance[i][j - 1] + 1,
+                    distance[i - 1][j - 1] + cost
+                )
+                if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1]) {
+                    distance[i][j] = minOf(distance[i][j], distance[i - 2][j - 2] + 1)
+                }
             }
         }
-        return edits + (accepted.length - i) + (candidate.length - j) <= 1
+        return distance[a.length][b.length]
     }
 }
