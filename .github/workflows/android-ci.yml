@@ -341,6 +341,9 @@ jobs:
           fi
           if test -f /tmp/appium.log; then
             tail -200 /tmp/appium.log
+            while IFS= read -r line; do
+              printf '::error title=Appium smoke log::%s\n' "$line"
+            done < <(tail -200 /tmp/appium.log)
             {
               echo '### Appium log'
               echo '```text'
