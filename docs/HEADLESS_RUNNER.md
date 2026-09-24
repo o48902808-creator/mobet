@@ -39,6 +39,9 @@ All three routes target the same `DeviceDriver` seam; they do not duplicate
 workflow policy inside the drivers.
 
 The `Headless Appium smoke` job in `Android CI` runs the bundled Settings demo
-on an API 29 emulator, starts Appium with UiAutomator2, publishes the JUnit XML
-report, and fails the job when the workflow or its expectations fail. It runs
-on pushes and pull requests with the rest of the verification matrix.
+on an API 29 emulator, starts pinned Appium 3.8.0 with UiAutomator2 8.7.0,
+publishes the JUnit XML report, and fails the job when the workflow or its
+expectations fail. It runs on pushes, pull requests, manual dispatches, and a
+nightly schedule with the rest of the verification matrix. The CI job caches
+its npm and Appium extension downloads without placing either dependency in
+the APK.

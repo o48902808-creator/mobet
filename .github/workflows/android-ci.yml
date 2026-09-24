@@ -4,6 +4,9 @@ on:
   push:
     branches: ["main", "arena/**"]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
 
 # Build jobs receive no repository write token. A compromised dependency cannot mutate source,
 # releases, pull requests, or commit comments.
@@ -295,13 +298,22 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install Appium and UiAutomator2 driver
+      - name: Cache Appium packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            ~/.appium
+          key: ${{ runner.os }}-appium-3.8.0-uiautomator2-8.7.0
+
+      - name: Install pinned Appium and UiAutomator2 driver
         run: |
-          npm install --global appium@3
+          npm install --global appium@3.8.0
           echo "NODE_BIN=$(command -v node)" >> "$GITHUB_ENV"
           echo "PYTHON_BIN=$(command -v python3)" >> "$GITHUB_ENV"
           echo "APPIUM_BIN=$(command -v appium)" >> "$GITHUB_ENV"
-          appium driver install uiautomator2
+          appium driver install uiautomator2@8.7.0
+          appium driver list --installed
 
       - name: Enable KVM
         run: |
