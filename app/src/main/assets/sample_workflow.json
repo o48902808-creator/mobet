@@ -6,14 +6,15 @@
   },
   "policy": {
     "allowedPackages": ["com.android.settings"],
-    "allowedActions": ["wait", "tap", "confirm", "back"],
+    "allowedActions": ["launch", "wait", "tap", "confirm", "back"],
     "maxActions": 10,
     "maxRuntimeMs": 30000,
     "allowVisualFallbacks": false,
     "allowSelfHealing": true
   },
   "steps": [
-    { "action": "wait", "text": "Settings", "timeoutMs": 5000, "retries": 1 },
+    { "action": "launch", "package": "com.android.settings" },
+    { "action": "wait", "text": "{{var:network_page}}", "timeoutMs": 10000, "retries": 1 },
     { "action": "tap", "text": "{{var:network_page}}", "timeoutMs": 5000, "retries": 1 },
     { "action": "wait", "text": "{{var:network_page}}", "timeoutMs": 5000 },
     { "action": "confirm", "message": "Allow Mobet to return to the previous screen?" },

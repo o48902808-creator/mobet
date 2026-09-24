@@ -356,7 +356,7 @@ def execute_step(
 ) -> None:
     action = str(step.get("action", "")).lower()
     timeout_ms = int(step.get("timeoutMs", 5000))
-    selector = selector_from_step(step)
+    selector = selector_from_step(step) if action in {"wait", "tap", "fill", "scroll"} else None
     before = session.page_source()
 
     if action == "delay":
