@@ -157,4 +157,74 @@ class MultiScreenGenerationTest {
     fun anUnparsableDocumentHasNoGrade() {
         assertEquals(null, WorkflowDocument.summarize("{ broken")!!.quality)
     }
+
+    // ── Route-ordered grounding ──────────────────────────────────────────────
+
+    /** Two screens of the same app both offer "Continue"; only one is reachable from here. */
+    private val detour = ScreenSnapshot(
+        "com.android.settings", 3_000,
+        listOf(element("Continue", "viewId: com.android.settings:id/detour_continue"))
+    )
+    private val reachable = ScreenSnapshot(
+        "com.android.settings", 1_500,
+        listOf(element("Continue", "viewId: com.android.settings:id/network_continue"))
+    )
+
+    @Test
+    fun theScreenActuallyReachableFromHereWinsOverTheMoreRecentOne() {
+        // Observed route: home → reachable. The detour screen is newer but unconnected.
+        SessionScreenMemory.remember(home)
+        SessionScreenMemory.remember(reachable)
+        SessionScreenMemory.remember(detour)
+
+        val result = WorkflowSynthesizer.synthesize("tap \"Continue\"", home, options).getOrThrow()
+        val tap = result.workflow.steps.first { it.action == "tap" }
+        assertEquals("com.android.settings:id/network_continue", tap.selector.viewId)
+    }
+
+    @Test
+    fun revisitingAScreenIsNotRecordedAsATransition() {
+        SessionScreenMemory.remember(home)
+        SessionScreenMemory.remember(home)
+        val id = SessionScreenMemory.identify(home.elements)
+        assertTrue(SessionScreenMemory.successors("com.android.settings", id).isEmpty())
+    }
+
+    @Test
+    fun successorsAreRankedByHowOftenTheyWereObserved() {
+        val homeId = SessionScreenMemory.identify(home.elements)
+        repeat(3) {
+            SessionScreenMemory.remember(home)
+            SessionScreenMemory.remember(networkScreen)
+        }
+        SessionScreenMemory.remember(home)
+        SessionScreenMemory.remember(detour)
+        val successors = SessionScreenMemory.successors("com.android.settings", homeId)
+        assertEquals(SessionScreenMemory.identify(networkScreen.elements), successors.first().screenId)
+    }
+
+    // ── Consented OCR as a diagnostic ────────────────────────────────────────
+
+    @Test
+    fun ocrDistinguishesAMissingControlFromAnInaccessibleOne() {
+        val withOcr = WorkflowSynthesizer.synthesize(
+            "tap \"Print\"", home,
+            options.copy(screenMemory = ScreenMemory.EMPTY, ocrText = listOf("Print", "Share"))
+        )
+        assertTrue(withOcr.exceptionOrNull()!!.message!!.contains("exposes no accessibility node"))
+
+        val withoutOcr = WorkflowSynthesizer.synthesize(
+            "tap \"Print\"", home, options.copy(screenMemory = ScreenMemory.EMPTY)
+        )
+        assertFalse(withoutOcr.exceptionOrNull()!!.message!!.contains("accessibility node"))
+    }
+
+    @Test
+    fun ocrNeverProducesAPlanStep() {
+        val result = WorkflowSynthesizer.synthesize(
+            "tap \"Print\"", home,
+            options.copy(screenMemory = ScreenMemory.EMPTY, ocrText = listOf("Print"))
+        )
+        assertTrue(result.isFailure)
+    }
 }

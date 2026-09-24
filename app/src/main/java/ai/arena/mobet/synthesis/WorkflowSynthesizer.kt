@@ -30,6 +30,16 @@ data class SynthesisOptions(
      * first screen. [ScreenMemory.EMPTY] restricts grounding to the current screen only.
      */
     val screenMemory: ScreenMemory = SessionScreenMemory,
+    /**
+     * Text the user has consented to recognize on screen with on-device OCR.
+     *
+     * OCR is used strictly as a *diagnostic* here, never as a target source: recognized pixels
+     * carry no selector, so a step built from them could only be replayed through visual
+     * fallbacks. Instead, when grounding fails, the engine can tell the user the difference
+     * between "that control does not exist" and "that control is drawn but exposes no
+     * accessibility node", which are two very different problems with different fixes.
+     */
+    val ocrText: List<String> = emptyList(),
     /** Optional explicit workflow name; otherwise derived from the goal text. */
     val name: String? = null
 )
@@ -100,6 +110,8 @@ object WorkflowSynthesizer {
         val launchPackages = mutableSetOf<String>()
         /** Selectors that came from a remembered screen rather than the live one. */
         private val rememberedFor = mutableMapOf<String, RememberedScreen>()
+        /** Screen the emitted route is currently standing on; null means the live screen. */
+        private var routeScreenId: String? = null
         private var labelSeq = 0
 
         fun emit(intent: Intent) {
@@ -306,8 +318,7 @@ object WorkflowSynthesizer {
                 priors = options.priors
             )
             if (live !is Grounding.NotFound) return live
-            options.screenMemory.screens(snapshot.packageName).forEach { screen ->
-                if (SessionScreenMemory.identify(snapshot.elements) == screen.screenId) return@forEach
+            candidateScreens().forEach { screen ->
                 val remembered = SnapshotGrounder.ground(
                     target = target,
                     elements = screen.elements,
@@ -317,10 +328,27 @@ object WorkflowSynthesizer {
                 )
                 if (remembered is Grounding.Resolved) {
                     rememberedFor[remembered.best.selector.toString()] = screen
+                    // Grounding here means the route is now standing on that screen, so the next
+                    // clause is searched from it first.
+                    routeScreenId = screen.screenId
                     return remembered
                 }
             }
             return live
+        }
+
+        /**
+         * Screens to search, in route order: those observed to follow wherever the plan currently
+         * stands, then everything else by recency. Ordering matters when two screens of an app
+         * both contain a control with the same label — the one actually reachable from here is the
+         * one the user meant.
+         */
+        private fun candidateScreens(): List<RememberedScreen> {
+            val here = routeScreenId ?: SessionScreenMemory.identify(snapshot.elements)
+            val predicted = options.screenMemory.successors(snapshot.packageName, here)
+            val rest = options.screenMemory.screens(snapshot.packageName)
+                .filterNot { screen -> predicted.any { it.screenId == screen.screenId } }
+            return (predicted + rest).filterNot { it.screenId == here }
         }
 
         private fun note(source: String, candidate: GroundedCandidate) {
@@ -341,6 +369,14 @@ object WorkflowSynthesizer {
             )
         }
 
+        /** True when consented OCR text contains the target but the accessibility tree does not. */
+        private fun visibleOnlyToOcr(target: String): Boolean {
+            if (options.ocrText.isEmpty()) return false
+            val needle = target.trim().lowercase()
+            if (needle.isEmpty()) return false
+            return options.ocrText.any { it.trim().lowercase().contains(needle) }
+        }
+
         private fun fromMemory(candidate: GroundedCandidate): Boolean =
             rememberedFor.containsKey(candidate.selector.toString())
 
@@ -356,7 +392,12 @@ object WorkflowSynthesizer {
             val memoryNote = if (remembered > 0) {
                 " $remembered remembered screen(s) of this app were also searched."
             } else ""
-            return "“$target” from clause “$source” is not on the captured screen.$hint$memoryNote"
+            val ocrNote = if (visibleOnlyToOcr(target)) {
+                " On-device OCR does see “$target” on this screen, so the control is drawn but " +
+                    "exposes no accessibility node — it cannot be targeted reliably, and no plan " +
+                    "step was invented for it."
+            } else ""
+            return "“$target” from clause “$source” is not on the captured screen.$hint$memoryNote$ocrNote"
         }
 
         private fun step(action: String): JSONObject = JSONObject().put("action", action)

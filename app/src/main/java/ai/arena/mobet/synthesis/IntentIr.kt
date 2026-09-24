@@ -213,7 +213,9 @@ object IntentGrammar {
         waitFor.matchEntire(clause)?.let { return WaitIntent(clause, requireTarget(unquote(it.groupValues[1]), clause)) }
         fill.matchEntire(clause)?.let { match ->
             val value = unquote(match.groupValues[2])
-            require(value.isNotBlank()) { "Fill clause has no value: “$clause”" }
+            require(value.isNotBlank()) {
+                ClauseAdvisor.explain("Fill clause has no value: “$clause”", clause)
+            }
             return FillIntent(clause, requireTarget(unquote(match.groupValues[1]), clause), value)
         }
         scroll.matchEntire(clause)?.let { match ->
@@ -230,11 +232,16 @@ object IntentGrammar {
         quoted.find(clause)?.let { match ->
             if (match.value.trim() == clause.trim()) return TapIntent(clause, match.groupValues[1])
         }
-        throw IllegalArgumentException("Clause is not understood: “$clause”")
+        // Guidance only: the clause is still rejected, never guessed at (see ClauseAdvisor).
+        throw IllegalArgumentException(
+            ClauseAdvisor.explain("Clause is not understood: “$clause”", clause)
+        )
     }
 
     private fun requireTarget(target: String, clause: String): String {
-        require(target.isNotBlank()) { "Clause has no target: “$clause”" }
+        require(target.isNotBlank()) {
+            ClauseAdvisor.explain("Clause has no target: “$clause”", clause)
+        }
         return target
     }
 

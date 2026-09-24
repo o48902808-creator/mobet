@@ -16,6 +16,15 @@ data class RememberedScreen(
 interface ScreenMemory {
     fun screens(packageName: String): List<RememberedScreen>
 
+    /**
+     * Screens observed to follow [fromScreenId], most frequently observed first.
+     *
+     * This is what makes multi-screen planning a *route* rather than a guess: after grounding
+     * "open Settings", the next clause should be grounded in the screen that opening Settings
+     * actually led to, not in whichever screen happens to be most recent.
+     */
+    fun successors(packageName: String, fromScreenId: String): List<RememberedScreen> = emptyList()
+
     companion object {
         /** Memory is ignored entirely. */
         val EMPTY: ScreenMemory = object : ScreenMemory {
@@ -43,6 +52,19 @@ object SessionScreenMemory : ScreenMemory {
     /** Packages tracked at once. */
     private const val MAX_PACKAGES = 8
 
+    /** Transitions retained per package; the least-observed edge is evicted first. */
+    const val MAX_EDGES_PER_PACKAGE = 64
+
+    /** Directed edges `from → to` with an observation count, bounded per package. */
+    private val edges = object : LinkedHashMap<String, MutableMap<Pair<String, String>, Int>>(8, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, MutableMap<Pair<String, String>, Int>>
+        ): Boolean = size > MAX_PACKAGES
+    }
+
+    /** Screen the last `remember` call recorded, per package, so the next one closes an edge. */
+    private val lastSeen = mutableMapOf<String, String>()
+
     private val byPackage = object : LinkedHashMap<String, LinkedHashMap<String, RememberedScreen>>(8, 0.75f, true) {
         override fun removeEldestEntry(
             eldest: MutableMap.MutableEntry<String, LinkedHashMap<String, RememberedScreen>>
@@ -60,6 +82,19 @@ object SessionScreenMemory : ScreenMemory {
             }
         }
         val id = identify(snapshot.elements)
+        // A transition is only recorded between two *different* consecutive screens of the same
+        // app: re-observing the same screen is not a route, and self-edges would swamp the graph.
+        lastSeen[snapshot.packageName]?.let { previous ->
+            if (previous != id) {
+                val packageEdges = edges.getOrPut(snapshot.packageName) { mutableMapOf() }
+                val key = previous to id
+                packageEdges[key] = (packageEdges[key] ?: 0) + 1
+                if (packageEdges.size > MAX_EDGES_PER_PACKAGE) {
+                    packageEdges.entries.minByOrNull { it.value }?.let { packageEdges.remove(it.key) }
+                }
+            }
+        }
+        lastSeen[snapshot.packageName] = id
         screens[id] = RememberedScreen(
             packageName = snapshot.packageName,
             screenId = id,
@@ -74,7 +109,21 @@ object SessionScreenMemory : ScreenMemory {
         byPackage[packageName]?.values?.sortedByDescending { it.observedAt }.orEmpty()
 
     @Synchronized
-    fun clear() = byPackage.clear()
+    override fun successors(packageName: String, fromScreenId: String): List<RememberedScreen> {
+        val known = byPackage[packageName] ?: return emptyList()
+        return edges[packageName].orEmpty()
+            .filterKeys { it.first == fromScreenId }
+            .entries
+            .sortedByDescending { it.value }
+            .mapNotNull { known[it.key.second] }
+    }
+
+    @Synchronized
+    fun clear() {
+        byPackage.clear()
+        edges.clear()
+        lastSeen.clear()
+    }
 
     @Synchronized
     fun summary(): String {
