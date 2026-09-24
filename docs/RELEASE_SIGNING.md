@@ -44,12 +44,26 @@ Back up the keystore file *and* its password to two offline locations before con
 - **Leak the key** → an attacker can publish an update that Android installs in place over a
   running Mobet, inheriting its accessibility grant. This is the worst failure in the project.
 
-### 2. Load the secrets
+### 2. Create the `release` environment and protect it
 
-*Settings → Secrets and variables → Actions → New repository secret*, or `gh secret set` with an
-admin-scoped login (a CI token cannot write secrets):
+*Settings → Environments → New environment → `release`*, then set its protection rules:
 
-| Secret | Contents | Required |
+- **Deployment branches and tags:** selected refs only — `v*`. The signing job then cannot run
+  from an arbitrary branch.
+- **Required reviewers:** yourself. Releasing the key becomes an explicit, logged approval.
+
+This repository is **public**, which makes the rule matter: anyone can open a PR, and while
+secrets are never exposed to fork PRs, a repository with more than one collaborator otherwise
+allows a branch that rewrites `release.yml` to print the keystore. Environment protection turns
+that into something that needs an approval you would notice.
+
+### 3. Load the secrets onto that environment
+
+*Settings → Environments → release → Environment secrets*, or `gh secret set --env release` with
+an admin-scoped login (a CI token cannot write secrets). Environment-scoped, not repository-wide,
+so no other workflow in the repository can read them:
+
+| Environment secret | Contents | Required |
 | --- | --- | --- |
 | `MOBET_KEYSTORE_BASE64` | `base64 -w0` of the keystore file | yes |
 | `MOBET_KEYSTORE_PASSWORD` | keystore password | yes |
@@ -64,7 +78,7 @@ a warning and the fingerprint it observed, so the pin can be added afterwards.
 
 Then delete the base64 copy: `shred -u ~/keys/mobet-release.p12.base64`.
 
-### 3. Verify the wiring before announcing anything
+### 4. Verify the wiring before announcing anything
 
 Run *Actions → Release APK* against a throwaway tag (e.g. `v1.0.0-rc1`), then:
 
@@ -83,37 +97,67 @@ which runs on every PR and exercises the gate against recorded apksigner transcr
 (production, debug key, v1-only, fingerprint mismatch, multiple signers, unreadable
 certificate).
 
+## Why the key never meets project build code
+
+The pipeline is three jobs with disjoint privileges, because a public repository's release
+pipeline should not hand the signing key to everything in its dependency graph:
+
+| Job | Runs | Holds | Cannot |
+| --- | --- | --- | --- |
+| `build` | Gradle, AGP, 9 third-party dependencies | nothing | sign, publish |
+| `sign` | apksigner/zipalign + this repo's stdlib Python | the signing key (via the `release` environment) | build project code |
+| `publish` | `gh release create` | `contents: write` | see the key, run project code |
+
+`build` therefore produces an **unsigned** APK. A malicious dependency executing there has no
+key to steal and no write token to abuse — which is the same reasoning the repository already
+applies to `android-ci.yml`, extended to the one job that previously would have broken it.
+
+Two properties fall out of the split:
+
+- **Reproducibility becomes checkable by strangers.** The rebuild is measured on unsigned
+  artifacts, which are byte-comparable by anyone; nobody needs the key to confirm the number.
+- **Signing is provably payload-preserving.** `scripts/apk-content-digest.py` digests every APK
+  entry except the signature files, so the signed artifact can be tied back to the independently
+  rebuilt payload. The sign job asserts this before attesting, and
+  `scripts/verify-release-apk.sh` re-checks it from the downloaded bytes.
+
 ## How the pipeline refuses to ship a debug-signed APK
 
 Four independent gates, in order — any one of them failing stops the release:
 
-1. **Secrets preflight** (`release.yml`, first step, before any project code runs). Missing any
-   of the four required secrets fails the job with an explicit message.
-2. **Gradle strict mode.** The release workflow sets `MOBET_REQUIRE_RELEASE_SIGNING=true`;
-   `app/build.gradle.kts` then throws if signing material is incomplete, instead of emitting
-   `app-release-unsigned.apk`. Locally the flag is unset, so `assembleRelease` still works for
-   development and simply produces an unsigned APK.
-3. **No fallback path exists.** The `release` build type is assigned either the real signing
-   config or `null` — never `signingConfigs["debug"]`. AGP only debug-signs a release variant if
-   you assign it that config, and nothing in this repository does. The staging step additionally
-   fails if `app-release-unsigned.apk` appears in the output directory.
-4. **Independent verification.** `apksigner verify --print-certs` runs against the finished APK
-   and fails if the signature is absent, if APK Signature Scheme v2 is missing, if the signer DN
-   contains `CN=Android Debug`, or if the fingerprint differs from `MOBET_SIGNING_CERT_SHA256`.
-   Its findings are published as `mobet-signing.json`, and the publish job re-reads that file and
+1. **Gradle cannot sign at all in CI.** The build job has no keystore, so AGP has no signing
+   config to apply. The `release` build type is assigned the real config or `null` — never
+   `signingConfigs["debug"]` — so there is no code path from "no key" to "debug key".
+2. **Secrets preflight** in the sign job fails with an explicit message if any of the four
+   secrets is missing, rather than proceeding toward an unsigned artifact.
+3. **Explicit signing flags.** `apksigner sign` is invoked with the key from the environment and
+   `--v1/--v2/--v3-signing-enabled true`; there is no fallback keystore to fall back to.
+4. **Independent verification.** `scripts/assert-production-signature.sh` runs `apksigner verify
+   --print-certs` against the finished APK and fails if the signature is absent, if APK Signature
+   Scheme v2 is missing, if there is more than one signer, if the signer DN contains
+   `CN=Android Debug`, or if the fingerprint differs from `MOBET_SIGNING_CERT_SHA256`. Its
+   findings are published as `mobet-signing.json`, and the publish job re-reads that file and
    refuses to create the release unless it attests a signed, non-debug artifact.
 
 Gate 4 is the load-bearing one: it validates the artifact rather than the intent, so it holds
-even if the Gradle configuration is changed in a way gates 1–3 do not anticipate.
+even if the build configuration changes in ways gates 1–3 do not anticipate. It is covered by
+`scripts/test_release_gates.py` against recorded apksigner transcripts — including the case where
+the pin is set *to* the debug certificate, which must still be rejected.
+
+For local development `app/build.gradle.kts` still accepts `MOBET_KEYSTORE_*` from the
+environment or `local.properties`, and `MOBET_REQUIRE_RELEASE_SIGNING=true` makes an incomplete
+setup fail loudly instead of silently producing an unsigned APK.
 
 ## Key handling in CI
 
 - The keystore is decoded to `$RUNNER_TEMP/signing/` with mode `600` — never into the workspace,
   where it could be swept into an artifact or the APK.
-- An `if: always()` step shreds it, so the key does not survive a failed build either.
-- The build job has `contents: read` only. The publish job, which holds `contents: write`, never
-  sees the signing secrets and runs no project code.
+- An `if: always()` step shreds it, so the key does not survive a failed run either.
+- The sign job checks out `scripts/` only (sparse checkout) and never runs Gradle.
+- Passwords reach apksigner as `env:` references, so they never appear in the process table.
 - Secrets are referenced only as `env:` on the specific steps that need them, never job-wide.
+- The certificate DN carries the project identity only. It is embedded in every published APK
+  and is world-readable, so it should not contain a personal name or address.
 
 ## Rotation
 

@@ -147,8 +147,13 @@ class SigningGate(unittest.TestCase):
         self.assertIn("not pinned", proc.stdout + proc.stderr)
 
 
-def build_release_fixture(directory: pathlib.Path, *, tamper: bool = False) -> str:
-    """Assemble a release-asset set of the shape the workflow publishes."""
+def build_release_fixture(directory: pathlib.Path, *, tamper: str = "") -> str:
+    """Assemble a release-asset set of the shape the three-job workflow publishes.
+
+    The build job emits an unsigned APK and measures reproducibility on it; the sign job adds
+    the signature. The fixtures mirror that split, including the content digest that ties the
+    signed artifact back to the independently rebuilt payload.
+    """
     subprocess.run([sys.executable, str(CAPABILITY), "--output", str(directory / "cap.json"),
                     "--version-name", "1.0.0", "--version-code", "10", "--commit", "c0ffee",
                     "--workflow", "wf", "--attestation", "ref",
@@ -159,10 +164,15 @@ def build_release_fixture(directory: pathlib.Path, *, tamper: bool = False) -> s
         z.writestr("assets/mobet-capability.json", json.dumps(cap, indent=2, ensure_ascii=False) + "\n")
         z.writestr("classes.dex", "payload")
         z.writestr("META-INF/CERT.RSA", "signature")
-    digest = hashlib.sha256(apk.read_bytes()).hexdigest()
+    unsigned_digest = hashlib.sha256(apk.read_bytes()).hexdigest()
+    content = subprocess.run(
+        [sys.executable, str(REPO / "scripts" / "apk-content-digest.py"), "--print", str(apk)],
+        check=True, capture_output=True, text=True).stdout.strip()
+    digest = unsigned_digest
     (directory / "mobet.apk.sha256").write_text(f"{digest}  mobet.apk\n")
     sidecar = dict(cap, artifact="mobet.apk", sha256=digest)
     (directory / "mobet-capability.json").write_text(json.dumps(sidecar, indent=2) + "\n")
+    # Evidence is built over the unsigned payload, exactly as the build job does it.
     subprocess.run([sys.executable, str(EVIDENCE), "--apk", str(apk),
                     "--capability", str(directory / "mobet-capability.json"),
                     "--output", str(directory / "mobet-evidence.zip")], check=True,
@@ -171,10 +181,12 @@ def build_release_fixture(directory: pathlib.Path, *, tamper: bool = False) -> s
     (directory / "mobet-evidence.zip.sha256").write_text(
         hashlib.sha256(ev).hexdigest() + "  mobet-evidence.zip\n")
     (directory / "mobet-reproducibility.json").write_text(json.dumps({
-        "schema": "mobet.reproducibility.v2", "firstSha256": digest,
-        "secondSha256": digest, "status": "reproducible",
-        "firstContentSha256": "aa", "secondContentSha256": "aa",
-        "contentStatus": "reproducible"}, indent=2) + "\n")
+        "schema": "mobet.reproducibility.v3", "buildType": "release",
+        "measuredOn": "unsigned APK (signing happens in a separate job)",
+        "firstSha256": unsigned_digest, "secondSha256": unsigned_digest,
+        "status": "reproducible", "contentSha256": content,
+        "secondContentSha256": content, "contentStatus": "reproducible",
+        "signedSha256": digest}, indent=2) + "\n")
     import base64
     payload = base64.b64encode(json.dumps({
         "subject": [{"name": "mobet.apk", "digest": {"sha256": digest}}],
@@ -187,9 +199,22 @@ def build_release_fixture(directory: pathlib.Path, *, tamper: bool = False) -> s
     (directory / "mobet-signing.json").write_text(json.dumps({
         "schema": "mobet.signing.v1", "signed": True, "debugKey": False,
         "certSha256": PROD_CERT}, indent=2) + "\n")
-    if tamper:
+    if tamper == "append":
+        # Trailing bytes after the central directory: zip readers ignore them, so only a
+        # whole-file digest notices. This is the shape of the classic appended-payload trick.
         with apk.open("ab") as handle:
             handle.write(b"\x00")
+    elif tamper == "payload":
+        # A swapped entry: the whole-file digest AND the content digest must both move,
+        # which is what proves the content digest is not merely decorative.
+        original = zipfile.ZipFile(apk)
+        entries = [(i, original.read(i.filename)) for i in original.infolist()]
+        original.close()
+        with zipfile.ZipFile(apk, "w") as z:
+            for info, data in entries:
+                z.writestr(info, b"MALICIOUS" if info.filename == "classes.dex" else data)
+    elif tamper:
+        raise ValueError(f"unknown tamper mode {tamper!r}")
     return digest
 
 
@@ -209,25 +234,42 @@ class ReleaseVerifier(unittest.TestCase):
             self.assertIn("PASS  APK matches mobet.apk.sha256", out)
             self.assertIn("PASS  capability sidecar binds this exact APK", out)
             self.assertIn("PASS  embedded manifest matches the sidecar", out)
-            self.assertIn("PASS  evidence binds this APK digest", out)
+            self.assertIn("PASS  evidence binds the unsigned payload the report rebuilds", out)
+            self.assertIn("PASS  signed APK payload matches the rebuilt payload", out)
             self.assertIn("PASS  attestation subject == this APK digest", out)
             # Signature verification needs the Android SDK; where it is absent the row must
             # say SKIP, never PASS — an unverified signature is not a verified one.
             if "SKIP  apksigner not found" in out:
                 self.assertNotIn("PASS  apksigner verifies", out)
 
-    def test_tampered_apk_fails_every_binding_check(self):
+    def test_appended_bytes_are_caught_by_the_whole_file_digest(self):
+        """Trailing bytes leave the zip entries untouched, so the digest chain must catch it."""
         with tempfile.TemporaryDirectory() as tmp:
-            build_release_fixture(pathlib.Path(tmp), tamper=True)
+            build_release_fixture(pathlib.Path(tmp), tamper="append")
             proc = run_verifier(pathlib.Path(tmp))
             out = proc.stdout
             self.assertEqual(proc.returncode, 1)
             self.assertIn("FAIL  APK digest", out)
             self.assertIn("FAIL  capability sidecar sha256", out)
-            self.assertIn("FAIL  evidence binds this APK digest", out)
-            self.assertIn("FAIL  report references this APK digest", out)
             self.assertIn("FAIL  attestation subject == this APK digest", out)
             self.assertIn("Do not install this APK", out)
+            # The payload genuinely is unchanged, so this check honestly still passes. The
+            # verifier must not manufacture a failure it cannot substantiate.
+            self.assertIn("PASS  signed APK payload matches the rebuilt payload", out)
+
+    def test_swapped_payload_is_caught_by_the_content_digest(self):
+        """A replaced classes.dex must break the tie to the independently rebuilt payload."""
+        with tempfile.TemporaryDirectory() as tmp:
+            build_release_fixture(pathlib.Path(tmp), tamper="payload")
+            proc = run_verifier(pathlib.Path(tmp))
+            out = proc.stdout
+            self.assertEqual(proc.returncode, 1)
+            self.assertIn("FAIL  signed APK payload matches the rebuilt payload", out)
+            self.assertIn("FAIL  APK digest", out)
+            self.assertIn("Do not install this APK", out)
+            # The embedded capability manifest is untouched by this swap, so that row still
+            # passes — the content digest is what carries the detection here.
+            self.assertIn("PASS  embedded manifest matches the sidecar", out)
 
 
 if __name__ == "__main__":

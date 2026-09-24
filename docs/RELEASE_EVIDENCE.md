@@ -22,12 +22,16 @@ release unless it attests a signed, non-debug APK. Users pin the fingerprint it 
 `docs/RELEASE_SIGNING.md`.
 
 Release CI also performs a clean second build and publishes `mobet-reproducibility.json`
-(`mobet.reproducibility.v2`). Signed artifacts need two honest measurements, so the report carries
-both: `firstSha256`/`secondSha256` over the whole file, and `firstContentSha256`/`secondContentSha256`
-over every APK entry except the v1 signature files (`META-INF/MANIFEST.MF`, `*.SF`, `*.RSA`, `*.DSA`,
-`*.EC`). The content digest is the one an independent rebuilder can match, because they do not hold
-the signing key; the whole-file digest additionally covers the signature block. A mismatch is
-reported rather than hidden, and neither replaces the separately attested first artifact.
+(`mobet.reproducibility.v3`). Because Mobet builds unsigned and signs in a separate job, the
+rebuild is measured on **unsigned** artifacts: `firstSha256` and `secondSha256` are whole-file
+digests of two independent builds of the same commit, which any third party can reproduce
+without holding the signing key. `contentSha256` digests every APK entry except the v1 signature
+files (`META-INF/MANIFEST.MF`, `*.SF`, `*.RSA`, `*.DSA`, `*.EC`), so it survives signing and ties
+the published signed APK back to that rebuild; `signedSha256` records the signed artifact. The
+sign job refuses to attest anything whose payload digest moved during signing, and
+`scripts/apk-content-digest.py` is the single implementation of that measurement. A
+non-reproducible rebuild is reported honestly and raised as a workflow warning rather than
+hidden.
 
 `scripts/verify-release-apk.sh` re-checks all of this from the downloaded bytes alone: archive
 integrity, published digest, `apksigner` signature and debug-key rejection, fingerprint pinning,

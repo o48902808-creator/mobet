@@ -52,8 +52,9 @@ The equivalent manual settings, as a fallback:
 > same process as a tap-by-tap walkthrough — merge, settings, release, install,
 > first run — designed for the GitHub mobile layout.
 
-**Prerequisite (one time):** the release signing secrets must exist, or the workflow fails
-at its first step by design. See [`docs/RELEASE_SIGNING.md`](RELEASE_SIGNING.md).
+**Prerequisite (one time):** the `release` environment must exist, carry the four signing
+secrets, and restrict deployments to `v*` tags with a required reviewer — otherwise the sign
+job fails by design. See [`docs/RELEASE_SIGNING.md`](RELEASE_SIGNING.md).
 
 The APK asset is built by *Actions → Release APK → Run workflow* (or by pushing a
 `v*` tag). The current line is **1.0.0 / versionCode 10** — the first production-signed
@@ -68,11 +69,13 @@ workflow_dispatch: Release APK
 The tag does not need to exist beforehand: the publish job creates it at `--target` the
 built commit. Pushing a `v*` tag yourself triggers the same workflow.
 
-The job builds `test assembleRelease` with the keystore from repository secrets, verifies
-the result with `apksigner` (rejecting unsigned APKs and the Android debug certificate,
-and pinning the signer fingerprint), records the SHA-256, builds the evidence bundle,
-rebuilds from clean for the reproducibility report, and attests the artifact with Sigstore.
-A separate, no-project-code publish job re-verifies the checksum and the signing evidence
+Three jobs with disjoint privileges. **build** runs `test assembleRelease` with no secrets and
+no write token, producing an *unsigned* APK plus the evidence bundle and a clean-rebuild
+reproducibility report (measured on unsigned artifacts, so anyone can reproduce the number).
+**sign** — gated on the `release` environment, running no project build code — zipaligns, signs
+with apksigner, asserts the signature is production and not the debug key, confirms signing did
+not alter a single byte of the built payload, and attests the result with Sigstore. **publish**
+holds `contents: write` and no secrets; it re-verifies the checksum and the signing evidence
 before creating the GitHub Release. The `releases/latest/download/mobet.apk` URL above then
 rotates to it automatically.
 

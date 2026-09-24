@@ -19,7 +19,9 @@ set -euo pipefail
 OUT="${HOME}/mobet-release.p12"
 ALIAS="mobet-release"
 VALIDITY_DAYS=10950 # 30 years: the key must outlive the app, not the other way round.
-DNAME="CN=Mobet, OU=Mobet, O=Mobet, L=Accra, C=GH"
+# The certificate is embedded in every published APK and is world-readable, so the
+# default DN carries the project identity only — no personal name, address or locality.
+DNAME="CN=Mobet, O=Mobet"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -90,19 +92,24 @@ Keystore created.
 1. Back up $OUT and its password offline (two locations). Losing either ends the
    upgrade path for every installed copy of Mobet.
 
-2. Load the secrets (needs an admin-scoped 'gh auth login', not a CI token):
+2. Create the 'release' environment (Settings -> Environments -> New environment),
+   then restrict it: deployment tags 'v*', and add yourself as a required reviewer.
+   On a public repository this is what stops a branch that rewrites the workflow from
+   reaching the key without an approval.
 
-   gh secret set MOBET_KEYSTORE_BASE64   --repo o48902808-creator/mobet < "$B64_FILE"
-   gh secret set MOBET_KEYSTORE_PASSWORD --repo o48902808-creator/mobet   # paste the password
-   gh secret set MOBET_KEY_ALIAS         --repo o48902808-creator/mobet --body '$ALIAS'
-   gh secret set MOBET_KEY_PASSWORD      --repo o48902808-creator/mobet   # same password
-   gh secret set MOBET_SIGNING_CERT_SHA256 --repo o48902808-creator/mobet --body '$CERT_SHA256'
+3. Load the secrets ONTO THAT ENVIRONMENT (needs an admin-scoped 'gh auth login',
+   not a CI token). --env keeps them out of reach of every other workflow:
 
-   (Or paste them in Settings -> Secrets and variables -> Actions -> New repository secret.)
+   R=o48902808-creator/mobet
+   gh secret set MOBET_KEYSTORE_BASE64     --repo \$R --env release < "$B64_FILE"
+   gh secret set MOBET_KEYSTORE_PASSWORD   --repo \$R --env release   # paste the password
+   gh secret set MOBET_KEY_ALIAS           --repo \$R --env release --body '$ALIAS'
+   gh secret set MOBET_KEY_PASSWORD        --repo \$R --env release   # same password
+   gh secret set MOBET_SIGNING_CERT_SHA256 --repo \$R --env release --body '$CERT_SHA256'
 
-3. Publish the fingerprint $CERT_SHA256 in docs/RELEASE_SIGNING.md so users can pin it.
+4. Publish the fingerprint $CERT_SHA256 in docs/RELEASE_SIGNING.md so users can pin it.
 
-4. Delete the base64 copy once the secret is set:
+5. Delete the base64 copy once the secret is set:
 
    shred -u "$B64_FILE" 2>/dev/null || rm -P "$B64_FILE" || rm -f "$B64_FILE"
 

@@ -161,18 +161,30 @@ if [ -s mobet-evidence.zip ]; then
   else
     skip "mobet-evidence.zip.sha256 not present"
   fi
-  python3 - "$APK_SHA" <<'PY'
+  python3 <<'PYEV'
 import json, sys, zipfile
 e = json.loads(zipfile.ZipFile("mobet-evidence.zip").read("evidence.json"))
 build = e.get("build", {})
-ok = build.get("apkSha256") == sys.argv[1]
-print(f"  {'PASS' if ok else 'FAIL'}  evidence binds this APK digest")
-p = e.get("privacy", {})
-clean = p.get("screenshotsIncluded") is False and p.get("secretsIncluded") is False
+# The evidence bundle is produced in the unsigned build job, so it binds the UNSIGNED payload.
+# The reproducibility report carries that same digest, which is how the chain closes:
+#   evidence -> unsigned APK -> independent rebuild -> content digest -> signed APK (below).
+ok = True
+try:
+    report = json.load(open("mobet-reproducibility.json"))
+except FileNotFoundError:
+    report = {}
+unsigned = report.get("firstSha256")
+if unsigned:
+    ok = build.get("apkSha256") == unsigned
+    print(f"  {'PASS' if ok else 'FAIL'}  evidence binds the unsigned payload the report rebuilds")
+else:
+    print("  SKIP  no reproducibility report to cross-check the evidence digest against")
+privacy = e.get("privacy", {})
+clean = privacy.get("screenshotsIncluded") is False and privacy.get("secretsIncluded") is False
 print(f"  {'PASS' if clean else 'FAIL'}  evidence declares no screenshots/secrets")
 print(f"        commit {build.get('commit')}  tests recorded: {len(e.get('tests', []))}")
 sys.exit(0 if ok and clean else 1)
-PY
+PYEV
   [ $? -eq 0 ] || FAILURES=$((FAILURES + 1))
 else
   skip "mobet-evidence.zip not present"
@@ -180,18 +192,55 @@ fi
 
 head2 "Reproducibility report"
 if [ -s mobet-reproducibility.json ]; then
-  python3 - "$APK_SHA" <<'PY'
-import json, sys
-r = json.load(open("mobet-reproducibility.json"))
-apk = sys.argv[1]
-bound = apk in (r.get("firstSha256"), r.get("secondSha256"))
-print(f"  {'PASS' if bound else 'FAIL'}  report references this APK digest")
-status = r.get("contentStatus", r.get("status"))
-print(f"  {'PASS' if status == 'reproducible' else 'FAIL'}  rebuild status: {status}")
-if r.get("status") == "non-reproducible" and r.get("contentStatus") == "reproducible":
-    print("        note: payload reproduces; whole-file digests differ (signature block).")
-sys.exit(0 if bound and status == "reproducible" else 1)
-PY
+  python3 - "$APK_SHA" <<'PYREPRO'
+import hashlib, json, sys, zipfile
+
+SIGNATURE_SUFFIXES = (".SF", ".RSA", ".DSA", ".EC")
+
+
+def content_digest(path):
+    """Payload digest: every entry except the v1 signature files. Survives signing."""
+    h = hashlib.sha256()
+    with zipfile.ZipFile(path) as archive:
+        for name in sorted(archive.namelist()):
+            if name == "META-INF/MANIFEST.MF":
+                continue
+            if name.startswith("META-INF/") and name.upper().endswith(SIGNATURE_SUFFIXES):
+                continue
+            h.update(name.encode())
+            h.update(b"\0")
+            h.update(hashlib.sha256(archive.read(name)).digest())
+    return h.hexdigest()
+
+
+report = json.load(open("mobet-reproducibility.json"))
+ok = True
+status = report.get("status")
+reproducible = status == "reproducible"
+print(f"  {'PASS' if reproducible else 'FAIL'}  independent rebuild of the unsigned APK: {status}")
+ok &= reproducible
+
+# The load-bearing link: the APK you downloaded must carry exactly the payload that was built
+# and independently rebuilt. Signing adds a signature block, so only a content digest can match.
+expected = report.get("contentSha256")
+if expected:
+    actual = content_digest("mobet.apk")
+    same = actual == expected
+    print(f"  {'PASS' if same else 'FAIL'}  signed APK payload matches the rebuilt payload")
+    if not same:
+        print(f"        downloaded {actual}")
+        print(f"        rebuilt    {expected}")
+    ok &= same
+else:
+    print("  SKIP  report predates contentSha256; payload not tied to the rebuild")
+
+signed = report.get("signedSha256")
+if signed:
+    match = signed == sys.argv[1]
+    print(f"  {'PASS' if match else 'FAIL'}  report records this signed APK digest")
+    ok &= match
+sys.exit(0 if ok else 1)
+PYREPRO
   [ $? -eq 0 ] || FAILURES=$((FAILURES + 1))
 else
   skip "mobet-reproducibility.json not present"
