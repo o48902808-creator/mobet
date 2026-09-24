@@ -40,7 +40,7 @@ accessibility says "saved" and the world model says "dead end", DS yields an exp
 conflict mass to compare against the corroboration bar instead of silently averaging it
 away. Internal change, same interface, provably equals current behavior under agreement.
 
-**3. Beam search in the goal planner.** `GoalPlanner` + `PlanSimulator` are already a
+**3. Beam search in the goal planner.** `WorkflowSynthesizer` + `PlanSimulator` are already a
 generate-then-score pipeline. **Beam search** (width 2–3, pruned by `PlanValidator` at
 every expansion) explores mixtures the greedy first-fit misses, with worst-case cost
 bounded by the existing simulation. Tests lock deterministic tie-breaking — replayability

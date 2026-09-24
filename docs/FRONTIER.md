@@ -41,7 +41,7 @@ planning with a build-enforced zero-radio invariant.
 **The architecture is already correct for it:** the model proposes, the
 deterministic `PlanValidator` disposes. A model suggestion enters the exact same
 policy pipeline as hand-written JSON, so a hallucinated plan is rejected, not
-executed. `GoalPlanner` remains the universal floor; the model is an
+executed. The deterministic synthesis engine remains the universal floor; the model is an
 accelerator, gated per-device with graceful absence.
 
 **Gate before any code:** its own threat-model section (prompt-injection

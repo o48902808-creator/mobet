@@ -5,6 +5,7 @@ import ai.arena.mobet.automation.MobetAccessibilityService
 import ai.arena.mobet.automation.PresenceLauncher
 import ai.arena.mobet.automation.RunReminder
 import ai.arena.mobet.automation.Workflow
+import ai.arena.mobet.automation.WorkflowDocument
 import ai.arena.mobet.automation.WorkflowTransfer
 import ai.arena.mobet.audit.AuditLedger
 import ai.arena.mobet.audit.LedgerBuildIdentity
@@ -496,35 +497,33 @@ class MainActivity : AppCompatActivity() {
     private fun refreshWorkflowSummary() {
         workflowSummary.removeAllViews()
         val source = editor.text?.toString().orEmpty()
-        if (source.isBlank()) return
-        val parsed = runCatching { Workflow.parse(source) }
-        val workflow = parsed.getOrNull()
-        if (workflow == null) {
+        val summary = WorkflowDocument.summarize(source) ?: return
+        val parseError = summary.parseError
+        if (parseError != null) {
             // Point at the breakage instead of just naming it: org.json reports a character
             // offset, the locator turns it into a line/column, and tapping the chip drops the
             // editor caret exactly there. Semantic errors carry no offset, so they fall back
             // to the message head.
-            val errorMessage = parsed.exceptionOrNull()?.message
-            val location = JsonErrorLocator.locate(source, errorMessage)
+            val location = JsonErrorLocator.locate(source, parseError)
             val label = "Invalid JSON" +
                 (location?.let { " · line ${it.line}, col ${it.column}" }
-                    ?: errorMessage?.let { " · ${it.lineSequence().first().take(48)}" }.orEmpty())
+                    ?: " · ${parseError.lineSequence().first().take(48)}")
             addChip(label, Tone.DANGER, R.drawable.ic_warning) {
                 location?.let {
                     editor.requestFocus()
                     editor.setSelection(it.offset)
                     flashErrorAt(it.offset)
                 }
-                showStatus("Invalid JSON: ${errorMessage ?: "parse error"}", Tone.DANGER)
+                showStatus("Invalid JSON: $parseError", Tone.DANGER)
             }
             return
         }
-        workflow.packageName?.let { addChip(it.substringAfterLast('.'), Tone.NEUTRAL) }
-        addChip("${workflow.steps.size}/${workflow.policy.maxActions} steps", Tone.NEUTRAL)
-        addChip("${workflow.policy.maxRuntimeMs / 1000}s budget", Tone.NEUTRAL)
-        if (workflow.policy.allowVisualFallbacks) addChip("Visual fallback", Tone.WARNING)
-        if (workflow.policy.allowSelfHealing) addChip("Self-healing", Tone.NEUTRAL)
-        val violations = runCatching { PlanValidator.validate(workflow) }.getOrDefault(emptyList())
+        summary.packageName?.let { addChip(it.substringAfterLast('.'), Tone.NEUTRAL) }
+        addChip("${summary.stepCount}/${summary.maxActions} steps", Tone.NEUTRAL)
+        addChip("${summary.runtimeSeconds}s budget", Tone.NEUTRAL)
+        if (summary.visualFallbacks) addChip("Visual fallback", Tone.WARNING)
+        if (summary.selfHealing) addChip("Self-healing", Tone.NEUTRAL)
+        val violations = summary.violations
         if (violations.isEmpty()) {
             addChip("Policy OK", Tone.SUCCESS, R.drawable.ic_check)
         } else {
@@ -1678,20 +1677,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyTargetPackage(target: String, label: String) {
         try {
-            val root = JSONObject(editor.text.toString())
-            val previous = root.optString("package").takeIf { it.isNotBlank() }
-            root.put("package", target)
-            val policy = root.optJSONObject("policy") ?: JSONObject().also { root.put("policy", it) }
-            val allowed = policy.optJSONArray("allowedPackages")
-            val packages = linkedSetOf<String>()
-            if (allowed != null) {
-                for (i in 0 until allowed.length()) packages.add(allowed.getString(i))
-            }
-            // Drop the package we are replacing, but preserve any additional launch targets.
-            if (previous != null) packages.remove(previous)
-            packages.add(target)
-            policy.put("allowedPackages", JSONArray(packages.toList()))
-            editor.setText(root.toString(2))
+            editor.setText(WorkflowDocument.retarget(editor.text.toString(), target))
             showStatus("Target set to $label ($target)", Tone.SUCCESS)
         } catch (error: Exception) {
             showStatus("Could not set target: ${error.message}", Tone.DANGER)
@@ -1998,23 +1984,7 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
             }
-            val root = JSONObject(editor.text.toString())
-            val steps = root.optJSONArray("steps") ?: JSONArray().also { root.put("steps", it) }
-            for (i in 0 until recorded.length()) steps.put(recorded.getJSONObject(i))
-            // Point the workflow at the app the recording was captured in: set the target when
-            // the document does not already name one, and always widen the package allowlist.
-            if (target != null) {
-                if (root.optString("package").isBlank()) root.put("package", target)
-                val policy = root.optJSONObject("policy") ?: JSONObject().also { root.put("policy", it) }
-                val allowed = policy.optJSONArray("allowedPackages")
-                    ?: JSONArray().also { policy.put("allowedPackages", it) }
-                var alreadyAllowed = false
-                for (i in 0 until allowed.length()) {
-                    if (allowed.getString(i) == target) { alreadyAllowed = true; break }
-                }
-                if (!alreadyAllowed) allowed.put(target)
-            }
-            editor.setText(root.toString(2))
+            editor.setText(WorkflowDocument.appendSteps(editor.text.toString(), recorded, target))
             showStatus(
                 "Imported ${recorded.length()} recorded steps" +
                     if (target != null) " — target allowlist includes $target" else "",

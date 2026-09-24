@@ -13,7 +13,7 @@ The Accessibility Service is the privileged boundary. The activity parses locall
 - `InteractionRecorder`: privacy-preserving tap/scroll capture; it records selectors but never entered text.
 - `ScreenInspector`: node-free snapshots with selector stability, uniqueness, role, and bounds diagnostics.
 - `SecretStore`: AES-GCM values protected by a non-exportable Android Keystore key.
-- `GoalPlanner`: offline natural-language-to-JSON compiler grounded only in inspected elements, with risk-driven confirmation insertion via the shared `RiskEngine`.
+- `synthesis/`: offline workflow generation engine — natural-language/recipe/recording → typed intent IR → grounding in inspected elements → robustness lowering → optimizer → risk-driven confirmation insertion via the shared `RiskEngine` → least-privilege policy → `PlanValidator`. See docs/WORKFLOW_GENERATION.md.
 - `PlanSimulator`: counterfactual dry run — static grounding grades, risk tiers, confirmation gates, duration estimate, secret masking.
 - `PlanValidator`: non-bypassable package/action allowlists, budgets, visual restrictions, and risk-tier confirmation rules shared by all plan sources.
 - `RiskEngine` (policy): deterministic, explainable per-step risk scoring; the single source of truth for what counts as consequential, destructive, financial, or credential-sensitive.

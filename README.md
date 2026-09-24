@@ -428,7 +428,7 @@ Every target must resolve confidently and uniquely against the inspected accessi
 
 ## Testing and CI
 
-JVM unit tests cover every deterministic component: `RiskEngine` tiers, `PlanValidator` rules, `FuzzyText` similarity, `SelectorResolver` healing and abstention, `ScreenFingerprint` stability, `GoalPlanner` grounding/rejection, `PlanSimulator` reports (including secret masking), and `Workflow` parsing bounds.
+JVM unit tests cover every deterministic component: `RiskEngine` tiers, `PlanValidator` rules, `FuzzyText` similarity, `SelectorResolver` healing and abstention, `ScreenFingerprint` stability, the synthesis engine's grammar, grounding, optimizer, quality grading and repair, `PlanSimulator` reports (including secret masking), and `Workflow` parsing bounds.
 
 Security posture is asserted rather than assumed: `ManifestPostureTest` locks the permission set, unexported components, and disabled backup; `VerifyNoNetworkPermission` checks the merged manifest; and `InjectionDefenceInDepthTest` proves containment holds with the injection detector deliberately bypassed, since a heuristic detector will eventually be evaded.
 
