@@ -19,13 +19,18 @@ APPIUM_PID=$!
 
 "$PYTHON_BIN" - <<'PY'
 import time
+import urllib.error
 import urllib.request
 
-deadline = time.time() + 60
+deadline = time.time() + 120
 while time.time() < deadline:
     try:
         urllib.request.urlopen('http://127.0.0.1:4723/status', timeout=2)
         break
+    except urllib.error.HTTPError as error:
+        if error.code < 500:
+            break
+        time.sleep(1)
     except Exception:
         time.sleep(1)
 else:

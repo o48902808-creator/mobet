@@ -339,5 +339,13 @@ jobs:
           if test -f headless-test-results/diagnostics.txt; then
             cat headless-test-results/diagnostics.txt
           fi
-          test ! -f /tmp/appium.log || tail -200 /tmp/appium.log
+          if test -f /tmp/appium.log; then
+            tail -200 /tmp/appium.log
+            {
+              echo '### Appium log'
+              echo '```text'
+              tail -200 /tmp/appium.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           exit 1
