@@ -229,11 +229,11 @@ androidComponents {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.core:core-ktx:1.19.1")
+    implementation("androidx.appcompat:appcompat:1.8.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("androidx.constraintlayout:constraintlayout:2.2.0")
-    implementation("androidx.coordinatorlayout:coordinatorlayout:1.2.0")
+    implementation("androidx.constraintlayout:constraintlayout:2.2.2")
+    implementation("androidx.coordinatorlayout:coordinatorlayout:1.3.0")
     // Material 3 components: cards, bottom sheets, snackbars, chips, text fields.
     implementation("com.google.android.material:material:1.12.0")
     // Bundled on-device OCR model; no network connection is required at runtime.
@@ -257,9 +257,9 @@ dependencies {
 
     // On-device tests: the Android Keystore boundary (SecretStore, EncryptedStateStore) and
     // encrypted persistence (AuditLedger) cannot be meaningfully simulated on the JVM.
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
     // View-level verification of the Material 3 control surface and rotation-safe draft
     // persistence — the behaviour the walkthrough in docs/TESTING_WALKTHROUGH.md describes.
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
 }
