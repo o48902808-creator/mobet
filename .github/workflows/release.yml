@@ -56,7 +56,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -152,7 +152,7 @@ jobs:
     steps:
       # Only the scripts are needed — never a Gradle build. Nothing executed in this job comes
       # from a third-party dependency.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           sparse-checkout: scripts
